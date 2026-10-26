@@ -138,7 +138,7 @@ void WindowResizeHandler::Update()
     }
 
     // Edges stay "moved" once they moved, so dragging an edge back to where it started still updates the divider.
-    m_moved |= FancyZonesDividers::DetectMovedEdges(m_startFrame, frame, MovedEdgeTolerancePx);
+    m_moved |= FancyZonesZoneRects::DetectMovedEdges(m_startFrame, frame, MovedEdgeTolerancePx);
     const auto result = workArea->ApplyEdgeResize(m_zones, frame, m_moved, m_window);
 
     m_lastFrame = frame;
@@ -169,7 +169,7 @@ void WindowResizeHandler::End()
     RECT frame{};
     if (ReadFrame(m_window, frame))
     {
-        m_moved |= FancyZonesDividers::DetectMovedEdges(m_startFrame, frame, MovedEdgeTolerancePx);
+        m_moved |= FancyZonesZoneRects::DetectMovedEdges(m_startFrame, frame, MovedEdgeTolerancePx);
         workArea->FinishEdgeResize(m_zones, frame, m_moved, m_window);
     }
     else

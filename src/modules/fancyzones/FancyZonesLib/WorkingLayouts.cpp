@@ -1,8 +1,9 @@
 ﻿#include "pch.h"
 #include "WorkingLayouts.h"
 
-using FancyZonesDataTypes::GridLayoutInfo;
 using FancyZonesDataTypes::WorkAreaId;
+using FancyZonesZoneRects::UnitRects;
+using FancyZonesZoneRects::ZoneRectModel;
 
 WorkingLayouts& WorkingLayouts::instance()
 {
@@ -10,7 +11,7 @@ WorkingLayouts& WorkingLayouts::instance()
     return self;
 }
 
-FancyZonesDividers::DividerModel* WorkingLayouts::Find(const WorkAreaId& id, const GUID& layoutId, const GridLayoutInfo& base)
+ZoneRectModel* WorkingLayouts::Find(const WorkAreaId& id, const GUID& layoutId, const UnitRects& base)
 {
     const auto key = id.toString();
     auto it = m_entries.find(key);
@@ -19,7 +20,7 @@ FancyZonesDividers::DividerModel* WorkingLayouts::Find(const WorkAreaId& id, con
         return nullptr;
     }
 
-    // Template layouts share GUID_NULL, so the base grid comparison is what tells them apart.
+    // Template layouts share GUID_NULL, so the base rectangle comparison is what tells them apart.
     if (!(it->second.layoutId == layoutId) || !it->second.model.SameBase(base))
     {
         m_entries.erase(it);
@@ -29,14 +30,14 @@ FancyZonesDividers::DividerModel* WorkingLayouts::Find(const WorkAreaId& id, con
     return &it->second.model;
 }
 
-FancyZonesDividers::DividerModel& WorkingLayouts::GetOrCreate(const WorkAreaId& id, const GUID& layoutId, const GridLayoutInfo& base)
+ZoneRectModel& WorkingLayouts::GetOrCreate(const WorkAreaId& id, const GUID& layoutId, const UnitRects& base)
 {
     if (auto* existing = Find(id, layoutId, base))
     {
         return *existing;
     }
 
-    auto [it, inserted] = m_entries.insert_or_assign(id.toString(), Entry{ layoutId, FancyZonesDividers::DividerModel(base) });
+    auto [it, inserted] = m_entries.insert_or_assign(id.toString(), Entry{ layoutId, ZoneRectModel(base) });
     return it->second.model;
 }
 

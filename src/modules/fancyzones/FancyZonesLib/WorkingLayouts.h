@@ -5,8 +5,8 @@
 
 #include <guiddef.h>
 
-#include <FancyZonesLib/DividerModel.h>
 #include <FancyZonesLib/FancyZonesDataTypes.h>
+#include <FancyZonesLib/ZoneRectModel.h>
 
 // In-memory, per work area (monitor + virtual desktop) store of modified grid layouts.
 // Entries are never written to disk. They outlive WorkArea objects, which are recreated on display changes.
@@ -16,12 +16,12 @@ class WorkingLayouts
 public:
     static WorkingLayouts& instance();
 
-    // Returns the model for the work area if it exists and still belongs to this layout and base grid.
-    // A stale entry (different layout id or base grid) is erased and nullptr is returned.
-    FancyZonesDividers::DividerModel* Find(const FancyZonesDataTypes::WorkAreaId& id, const GUID& layoutId, const FancyZonesDataTypes::GridLayoutInfo& base);
+    // Returns the model for the work area if it exists and still belongs to this layout and base zone rectangles.
+    // A stale entry (different layout id or base rectangles) is erased and nullptr is returned.
+    FancyZonesZoneRects::ZoneRectModel* Find(const FancyZonesDataTypes::WorkAreaId& id, const GUID& layoutId, const FancyZonesZoneRects::UnitRects& base);
 
     // Returns the matching model, or replaces a stale/missing entry with a fresh unmodified one.
-    FancyZonesDividers::DividerModel& GetOrCreate(const FancyZonesDataTypes::WorkAreaId& id, const GUID& layoutId, const FancyZonesDataTypes::GridLayoutInfo& base);
+    FancyZonesZoneRects::ZoneRectModel& GetOrCreate(const FancyZonesDataTypes::WorkAreaId& id, const GUID& layoutId, const FancyZonesZoneRects::UnitRects& base);
 
     void Remove(const FancyZonesDataTypes::WorkAreaId& id);
     void Clear();
@@ -30,7 +30,7 @@ private:
     struct Entry
     {
         GUID layoutId;
-        FancyZonesDividers::DividerModel model;
+        FancyZonesZoneRects::ZoneRectModel model;
     };
 
     WorkingLayouts() = default;

@@ -2,16 +2,16 @@
 
 #include <guiddef.h>
 
-#include <FancyZonesLib/DividerModel.h>
 #include <FancyZonesLib/FancyZonesDataTypes.h>
 #include <FancyZonesLib/Zone.h>
+#include <FancyZonesLib/ZoneRectModel.h>
 
 class WorkAreaConfiguration;
 class WorkArea;
 
-// Tracks one user resize (resize cursor drag) of a snapped window and turns it into grid divider moves.
-// Additive to the natural FancyZones resize: edges on the work-area border (or without a divider) are left to the
-// user and nothing else moves; only edges on a divider move that divider and the windows whose zones changed.
+// Tracks one user resize (resize cursor drag) of a snapped window and turns it into zone wall moves.
+// Additive to the natural FancyZones resize: edges on the work-area border are left to the user and nothing else
+// moves; an inner edge moves only the wall segment it touches and the windows whose zones changed.
 // The handler is bound to the work area (WorkAreaId) and layout the drag started on. The work area object is looked
 // up by that id on every call because it can be recreated while a drag is in flight; if it is gone or its layout
 // changed, the drag is aborted.
@@ -53,7 +53,7 @@ private:
     ZoneIndexSet m_zones;
     RECT m_startFrame{};
     RECT m_lastFrame{};
-    FancyZonesDividers::MovedEdges m_moved;
+    FancyZonesZoneRects::MovedEdges m_moved;
     ULONGLONG m_lastUpdateTick{};
     bool m_cueAtBase = true;
     bool m_cueShown = false; // the cue is shown only once a divider edge is dragged

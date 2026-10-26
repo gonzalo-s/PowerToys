@@ -4,7 +4,7 @@
 #include <FancyZonesLib/util.h>
 
 using namespace Microsoft::VisualStudio::CppUnitTestFramework;
-using namespace FancyZonesDividers;
+using namespace FancyZonesZoneRects;
 using FancyZonesDataTypes::GridLayoutInfo;
 using FancyZonesDataTypes::WorkAreaId;
 
@@ -12,7 +12,8 @@ namespace FancyZonesUnitTests
 {
     TEST_CLASS (WorkingLayoutsUnitTests)
     {
-        static GridLayoutInfo MakeGrid(const std::vector<int>& cols)
+        // Base zone rectangles of a one-row grid with the given column percents.
+        static UnitRects MakeGrid(const std::vector<int>& cols)
         {
             const std::vector<int> rows{ 10000 };
             std::vector<std::vector<int>> map(1);
@@ -21,7 +22,7 @@ namespace FancyZonesUnitTests
                 map[0].push_back(static_cast<int>(c));
             }
 
-            return GridLayoutInfo(GridLayoutInfo::Full{
+            return RectsFromGrid(GridLayoutInfo(GridLayoutInfo::Full{
                 .rows = 1,
                 .columns = static_cast<int>(cols.size()),
                 .rowsPercents = rows,
@@ -29,7 +30,7 @@ namespace FancyZonesUnitTests
                 .cellChildMap = map,
                 .showSpacing = false,
                 .spacing = 0,
-                .sensitivityRadius = 0 });
+                .sensitivityRadius = 0 }));
         }
 
         static WorkAreaId Id(const wchar_t* monitor, const wchar_t* desktop)
@@ -68,11 +69,12 @@ namespace FancyZonesUnitTests
             const auto base = MakeGrid({ 5000, 5000 });
 
             auto& model = WorkingLayouts::instance().GetOrCreate(id, m_layout, base);
-            Assert::IsTrue(model.Move({ Axis::Column, 1 }, 6000, 500, 0));
+            Assert::IsTrue(model.MoveEdge({ 0 }, Side::Right, 6000, 500, 0) == MoveResult::Moved);
 
             auto* found = WorkingLayouts::instance().Find(id, m_layout, base);
             Assert::IsNotNull(found);
-            Assert::AreEqual(6000, found->Position({ Axis::Column, 1 }));
+            Assert::AreEqual(6000, found->Current().at(0).right);
+            Assert::IsTrue(found->IsModified());
         }
 
         TEST_METHOD (GetOrCreateReturnsSameEntry)
@@ -80,15 +82,15 @@ namespace FancyZonesUnitTests
             const auto id = Id(L"A", m_desktop);
             const auto base = MakeGrid({ 5000, 5000 });
 
-            WorkingLayouts::instance().GetOrCreate(id, m_layout, base).Move({ Axis::Column, 1 }, 6000, 500, 0);
+            WorkingLayouts::instance().GetOrCreate(id, m_layout, base).MoveEdge({ 0 }, Side::Right, 6000, 500, 0);
             auto& again = WorkingLayouts::instance().GetOrCreate(id, m_layout, base);
-            Assert::AreEqual(6000, again.Position({ Axis::Column, 1 }));
+            Assert::AreEqual(6000, again.Current().at(1).left);
         }
 
         TEST_METHOD (EntriesAreKeyedByWorkArea)
         {
             const auto base = MakeGrid({ 5000, 5000 });
-            WorkingLayouts::instance().GetOrCreate(Id(L"A", m_desktop), m_layout, base).Move({ Axis::Column, 1 }, 6000, 500, 0);
+            WorkingLayouts::instance().GetOrCreate(Id(L"A", m_desktop), m_layout, base).MoveEdge({ 0 }, Side::Right, 6000, 500, 0);
 
             Assert::IsNull(WorkingLayouts::instance().Find(Id(L"B", m_desktop), m_layout, base));
             Assert::IsNull(WorkingLayouts::instance().Find(Id(L"A", L"{61FA9FC0-26A6-4B37-A834-491C148DFC57}"), m_layout, base));
@@ -100,7 +102,7 @@ namespace FancyZonesUnitTests
             const auto base = MakeGrid({ 5000, 5000 });
             auto before = Id(L"A", m_desktop);
             before.monitorId.monitor = reinterpret_cast<HMONITOR>(0x1111);
-            WorkingLayouts::instance().GetOrCreate(before, m_layout, base).Move({ Axis::Column, 1 }, 6000, 500, 0);
+            WorkingLayouts::instance().GetOrCreate(before, m_layout, base).MoveEdge({ 0 }, Side::Right, 6000, 500, 0);
 
             auto after = Id(L"A", m_desktop);
             after.monitorId.monitor = reinterpret_cast<HMONITOR>(0x2222); // handle changed after resume
@@ -111,7 +113,7 @@ namespace FancyZonesUnitTests
         {
             const auto id = Id(L"A", m_desktop);
             const auto base = MakeGrid({ 5000, 5000 });
-            WorkingLayouts::instance().GetOrCreate(id, m_layout, base).Move({ Axis::Column, 1 }, 6000, 500, 0);
+            WorkingLayouts::instance().GetOrCreate(id, m_layout, base).MoveEdge({ 0 }, Side::Right, 6000, 500, 0);
 
             Assert::IsNull(WorkingLayouts::instance().Find(id, m_otherLayout, base));
             // the stale entry is gone, even for the original layout id
@@ -121,7 +123,7 @@ namespace FancyZonesUnitTests
         TEST_METHOD (DifferentBaseDiscardsEntry)
         {
             const auto id = Id(L"A", m_desktop);
-            WorkingLayouts::instance().GetOrCreate(id, m_layout, MakeGrid({ 5000, 5000 })).Move({ Axis::Column, 1 }, 6000, 500, 0);
+            WorkingLayouts::instance().GetOrCreate(id, m_layout, MakeGrid({ 5000, 5000 })).MoveEdge({ 0 }, Side::Right, 6000, 500, 0);
 
             Assert::IsNull(WorkingLayouts::instance().Find(id, m_layout, MakeGrid({ 4000, 6000 })));
             Assert::IsNull(WorkingLayouts::instance().Find(id, m_layout, MakeGrid({ 5000, 5000 })));
@@ -130,11 +132,11 @@ namespace FancyZonesUnitTests
         TEST_METHOD (GetOrCreateReplacesStaleEntry)
         {
             const auto id = Id(L"A", m_desktop);
-            WorkingLayouts::instance().GetOrCreate(id, m_layout, MakeGrid({ 5000, 5000 })).Move({ Axis::Column, 1 }, 6000, 500, 0);
+            WorkingLayouts::instance().GetOrCreate(id, m_layout, MakeGrid({ 5000, 5000 })).MoveEdge({ 0 }, Side::Right, 6000, 500, 0);
 
             auto& fresh = WorkingLayouts::instance().GetOrCreate(id, m_otherLayout, MakeGrid({ 3000, 3000, 4000 }));
             Assert::IsFalse(fresh.IsModified());
-            Assert::AreEqual(3, fresh.Current().columns());
+            Assert::AreEqual(size_t{ 3 }, fresh.Current().size());
         }
 
         TEST_METHOD (RemoveAndClear)

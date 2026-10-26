@@ -3,18 +3,18 @@
 #include <optional>
 #include <vector>
 
-#include <FancyZonesLib/DividerModel.h>
 #include <FancyZonesLib/Layout.h>
 #include <FancyZonesLib/LayoutAssignedWindows.h>
+#include <FancyZonesLib/ZoneRectModel.h>
 
 class ZonesOverlay;
 
 struct EdgeResizeResult
 {
-    bool changed = false; // a divider moved and the layout was rebuilt
-    bool atBase = true; // every divider touched by this resize is at its base position
-    bool dividerDragged = false; // the moved edges mapped to at least one grid divider
-    bool outerEdgeMoved = false; // a moved edge has no divider (work-area border): it stays where the user put it
+    bool changed = false; // a zone wall moved and the layout was rebuilt
+    bool atBase = true; // every inner side of the dragged block touched by this resize is at its base position
+    bool dividerDragged = false; // at least one moved edge is an inner edge (it has a neighbouring zone)
+    bool outerEdgeMoved = false; // a moved edge lies on the work-area border: it stays where the user put it
 };
 
 class WorkArea
@@ -59,13 +59,14 @@ public:
     void InitSnappedWindows();
     void UpdateWindowPositions(HWND skipWindow = nullptr);
 
-    // Dynamic grid resize. Frames are visible window frames in screen coordinates. Edges without a divider
-    // (work-area border) keep the natural FancyZones behaviour: no entry, no other window moves.
+    // Dynamic grid resize. Frames are visible window frames in screen coordinates. An inner edge moves only the zone
+    // wall segment it touches (the zones on both sides of it). Edges on the work-area border keep the natural
+    // FancyZones behaviour: no entry, no other window moves.
     // FinishEdgeResize repositions only windows whose zones changed; the dragged window is placed into its zones
-    // only when every moved edge was a divider edge, and nothing is repositioned when no divider was dragged.
-    bool SupportsEdgeResize() const noexcept { return m_baseGrid.has_value(); }
-    EdgeResizeResult ApplyEdgeResize(const ZoneIndexSet& zones, const RECT& currentFrame, const FancyZonesDividers::MovedEdges& moved, HWND skipWindow);
-    void FinishEdgeResize(const ZoneIndexSet& zones, const RECT& finalFrame, const FancyZonesDividers::MovedEdges& moved, HWND draggedWindow = nullptr);
+    // only when every moved edge was an inner edge, and nothing is repositioned when no inner edge was dragged.
+    bool SupportsEdgeResize() const noexcept { return m_baseRects.has_value(); }
+    EdgeResizeResult ApplyEdgeResize(const ZoneIndexSet& zones, const RECT& currentFrame, const FancyZonesZoneRects::MovedEdges& moved, HWND skipWindow);
+    void FinishEdgeResize(const ZoneIndexSet& zones, const RECT& finalFrame, const FancyZonesZoneRects::MovedEdges& moved, HWND draggedWindow = nullptr);
     void DiscardUnmodifiedWorkingLayout();
     void ShowResizeCue(HWND draggedWindow, bool atBase);
 
@@ -94,7 +95,7 @@ protected:
 private:
     bool InitWindow(HINSTANCE hinstance);
     void RepositionWindow(HWND window, const ZoneIndexSet& zones);
-    EdgeResizeResult ApplyEdgeResizeInternal(const ZoneIndexSet& zones, const RECT& currentFrame, const FancyZonesDividers::MovedEdges& moved, HWND skipWindow, bool reposition);
+    EdgeResizeResult ApplyEdgeResizeInternal(const ZoneIndexSet& zones, const RECT& currentFrame, const FancyZonesZoneRects::MovedEdges& moved, HWND skipWindow, bool reposition);
     void InitLayout(const FancyZonesDataTypes::WorkAreaId& parentUniqueId);
     
     void CalculateZoneSet();
@@ -106,7 +107,7 @@ private:
     const FancyZonesDataTypes::WorkAreaId m_uniqueId;
     HWND m_window{}; // Hidden tool window used to represent current monitor desktop work area.
     std::unique_ptr<Layout> m_layout;
-    std::optional<FancyZonesDataTypes::GridLayoutInfo> m_baseGrid; // set when the applied layout is grid-based
+    std::optional<FancyZonesZoneRects::UnitRects> m_baseRects; // zone rectangles of the applied layout, set when it is grid-based
     ZonesMap m_baseZones; // template zones of the applied layout, before any working-layout override (drawn by the resize cue)
     LayoutAssignedWindows m_layoutWindows{};
     std::unique_ptr<ZonesOverlay> m_zonesOverlay;
