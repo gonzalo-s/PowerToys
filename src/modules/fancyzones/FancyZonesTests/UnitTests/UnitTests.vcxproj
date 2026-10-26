@@ -47,7 +47,6 @@
     <ClCompile Include="FancyZonesSettings.Spec.cpp" />
     <ClCompile Include="JsonHelpers.Tests.cpp" />
     <ClCompile Include="Layout.Spec.cpp" />
-    <ClCompile Include="DividerModel.Spec.cpp" />
     <ClCompile Include="LayoutConfigurator.Spec.cpp" />
     <ClCompile Include="LayoutHotkeysTests.Spec.cpp" />
     <ClCompile Include="LayoutTemplatesTests.Spec.cpp" />

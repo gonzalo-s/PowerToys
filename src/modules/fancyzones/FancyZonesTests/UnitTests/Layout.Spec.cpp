@@ -90,57 +90,6 @@ namespace FancyZonesUnitTests
             CustomAssert::AreEqual(m_layout->Type(), m_data.type);
         }
 
-        TEST_METHOD (InitFromGridUsesGivenPercentsAndSpacing)
-        {
-            auto grid = LayoutConfigurator::GridInfo(m_data, FancyZonesUtils::Rect(RECT{ 0, 0, 1920, 1080 })).value();
-            grid.columnsPercents()[0] = 6000;
-            grid.columnsPercents()[1] = 4000;
-
-            Assert::IsTrue(m_layout->InitFromGrid(FancyZonesUtils::Rect(RECT{ 0, 0, 1920, 1080 }), grid));
-            Assert::AreEqual(17, m_layout->Spacing());
-            Assert::AreEqual(size_t{ 4 }, m_layout->Zones().size());
-
-            // column boundary at 6000 * 1920 / 10000 = 1152, spacing/2 = 8 on each side
-            Assert::AreEqual(1144L, m_layout->Zones().at(0).GetZoneRect().right);
-            Assert::AreEqual(1160L, m_layout->Zones().at(1).GetZoneRect().left);
-            // whole line: the bottom row shares the same boundary
-            Assert::AreEqual(1144L, m_layout->Zones().at(2).GetZoneRect().right);
-            Assert::AreEqual(1160L, m_layout->Zones().at(3).GetZoneRect().left);
-            // rows untouched: 5000 * 1080 / 10000 = 540, minus 8
-            Assert::AreEqual(532L, m_layout->Zones().at(0).GetZoneRect().bottom);
-        }
-
-        TEST_METHOD (InitFromGridRejectsEmptyWorkArea)
-        {
-            const FancyZonesUtils::Rect workArea(RECT{ 0, 0, 1920, 1080 });
-            const auto grid = LayoutConfigurator::GridInfo(m_data, workArea).value();
-            Assert::IsTrue(m_layout->InitFromGrid(workArea, grid));
-            const RECT before = m_layout->Zones().at(0).GetZoneRect();
-
-            Assert::IsFalse(m_layout->InitFromGrid(FancyZonesUtils::Rect(RECT{ 0, 0, 0, 0 }), grid));
-            Assert::AreEqual(size_t{ 4 }, m_layout->Zones().size());
-            Assert::AreEqual(before.right, m_layout->Zones().at(0).GetZoneRect().right);
-        }
-
-        TEST_METHOD (InitFromGridRejectsDifferentZoneCount)
-        {
-            const FancyZonesUtils::Rect workArea(RECT{ 0, 0, 1920, 1080 });
-            Assert::IsTrue(m_layout->InitFromGrid(workArea, LayoutConfigurator::GridInfo(m_data, workArea).value()));
-            const RECT before = m_layout->Zones().at(0).GetZoneRect();
-
-            // three columns: 3 zones, the layout expects m_data.zoneCount = 4
-            const GridLayoutInfo threeZones(GridLayoutInfo::Full{
-                .rows = 1,
-                .columns = 3,
-                .rowsPercents = { 10000 },
-                .columnsPercents = { 3333, 3333, 3334 },
-                .cellChildMap = { { 0, 1, 2 } } });
-            Assert::IsFalse(m_layout->InitFromGrid(workArea, threeZones));
-            Assert::AreEqual(size_t{ 4 }, m_layout->Zones().size());
-            Assert::AreEqual(before.right, m_layout->Zones().at(0).GetZoneRect().right);
-            Assert::AreEqual(before.bottom, m_layout->Zones().at(0).GetZoneRect().bottom);
-        }
-
         TEST_METHOD (InitFromRectsUsesGivenRectsAndSpacing)
         {
             const FancyZonesUtils::Rect workArea(RECT{ 0, 0, 1920, 1080 });

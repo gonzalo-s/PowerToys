@@ -168,24 +168,6 @@ bool Layout::Init(const FancyZonesUtils::Rect& workArea, HMONITOR monitor) noexc
     return m_zones.size() == m_data.zoneCount;
 }
 
-bool Layout::InitFromGrid(const FancyZonesUtils::Rect& workArea, const FancyZonesDataTypes::GridLayoutInfo& grid) noexcept
-{
-    if (workArea.width() == 0 || workArea.height() == 0)
-    {
-        Logger::error(L"Layout grid initialization: invalid work area");
-        return false;
-    }
-
-    auto zones = LayoutConfigurator::GridZones(workArea, grid, Spacing());
-    if (zones.size() != static_cast<size_t>(m_data.zoneCount))
-    {
-        return false;
-    }
-
-    m_zones = std::move(zones);
-    return true;
-}
-
 namespace
 {
     // floor(length * units / TotalUnits); equals CalculateGridZones' "totalPercents * total / C_MULTIPLIER".
