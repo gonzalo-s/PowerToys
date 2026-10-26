@@ -61,6 +61,7 @@ public:
     bool SupportsEdgeResize() const noexcept { return m_baseGrid.has_value(); }
     EdgeResizeResult ApplyEdgeResize(const ZoneIndexSet& zones, const RECT& currentFrame, const FancyZonesDividers::MovedEdges& moved, HWND skipWindow);
     void FinishEdgeResize(const ZoneIndexSet& zones, const RECT& finalFrame, const FancyZonesDividers::MovedEdges& moved);
+    void DiscardUnmodifiedWorkingLayout();
     void ShowResizeCue(HWND draggedWindow, bool atBase);
 
     bool Snap(HWND window, const ZoneIndexSet& zones, bool updatePosition = true);

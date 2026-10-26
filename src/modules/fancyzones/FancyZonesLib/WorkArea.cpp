@@ -374,6 +374,20 @@ void WorkArea::FinishEdgeResize(const ZoneIndexSet& zones, const RECT& finalFram
     UpdateWindowPositions();
 }
 
+void WorkArea::DiscardUnmodifiedWorkingLayout()
+{
+    if (m_layout && m_baseGrid)
+    {
+        const auto* model = WorkingLayouts::instance().Find(m_uniqueId, m_layout->Id(), *m_baseGrid);
+        if (model && !model->IsModified())
+        {
+            WorkingLayouts::instance().Remove(m_uniqueId);
+            CalculateZoneSet();
+            UpdateWindowPositions();
+        }
+    }
+}
+
 void WorkArea::ShowResizeCue(HWND draggedWindow, bool atBase)
 {
     if (!m_layout || !m_baseGrid || !m_zonesOverlay)

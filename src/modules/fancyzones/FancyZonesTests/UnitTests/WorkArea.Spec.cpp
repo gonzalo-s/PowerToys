@@ -596,6 +596,25 @@ namespace FancyZonesUnitTests
             Assert::IsNull(WorkingLayouts::instance().Find(m_workAreaId, m_workArea->GetLayoutId(), base));
         }
 
+        TEST_METHOD (DiscardRemovesUnmodifiedWorkingLayout)
+        {
+            m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 960, 540 }, Right(), nullptr);
+            m_workArea->DiscardUnmodifiedWorkingLayout();
+
+            const auto base = LayoutConfigurator::GridInfo(AppliedLayouts::instance().GetDeviceLayout(m_workAreaId).value()).value();
+            Assert::IsNull(WorkingLayouts::instance().Find(m_workAreaId, m_workArea->GetLayoutId(), base));
+        }
+
+        TEST_METHOD (DiscardKeepsModifiedWorkingLayout)
+        {
+            m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 1160, 540 }, Right(), nullptr);
+            m_workArea->DiscardUnmodifiedWorkingLayout();
+
+            const auto base = LayoutConfigurator::GridInfo(AppliedLayouts::instance().GetDeviceLayout(m_workAreaId).value()).value();
+            Assert::IsNotNull(WorkingLayouts::instance().Find(m_workAreaId, m_workArea->GetLayoutId(), base));
+            Assert::IsTrue(std::abs(m_workArea->GetLayout()->Zones().at(0).GetZoneRect().right - 1160L) <= 1);
+        }
+
         TEST_METHOD (FinishKeepsModifiedLayout)
         {
             m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 1160, 540 }, Right(), nullptr);
