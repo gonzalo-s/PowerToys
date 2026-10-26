@@ -169,6 +169,11 @@ void WindowResizeHandler::End()
         m_moved |= FancyZonesDividers::DetectMovedEdges(m_startFrame, frame, MovedEdgeTolerancePx);
         workArea->FinishEdgeResize(m_zones, frame, m_moved);
     }
+    else
+    {
+        // frame unreadable: nothing to commit, drop an unmodified working entry like Abort() does
+        workArea->DiscardUnmodifiedWorkingLayout();
+    }
 
     workArea->HideZones();
 
