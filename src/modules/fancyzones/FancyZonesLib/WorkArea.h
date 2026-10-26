@@ -13,6 +13,8 @@ struct EdgeResizeResult
 {
     bool changed = false; // a divider moved and the layout was rebuilt
     bool atBase = true; // every divider touched by this resize is at its base position
+    bool dividerDragged = false; // the moved edges mapped to at least one grid divider
+    bool outerEdgeMoved = false; // a moved edge has no divider (work-area border): it stays where the user put it
 };
 
 class WorkArea
@@ -57,16 +59,23 @@ public:
     void InitSnappedWindows();
     void UpdateWindowPositions(HWND skipWindow = nullptr);
 
-    // Dynamic grid resize. Frames are visible window frames in screen coordinates.
+    // Dynamic grid resize. Frames are visible window frames in screen coordinates. Edges without a divider
+    // (work-area border) keep the natural FancyZones behaviour: no entry, no other window moves.
+    // FinishEdgeResize repositions only windows whose zones changed; the dragged window is placed into its zones
+    // only when every moved edge was a divider edge, and nothing is repositioned when no divider was dragged.
     bool SupportsEdgeResize() const noexcept { return m_baseGrid.has_value(); }
     EdgeResizeResult ApplyEdgeResize(const ZoneIndexSet& zones, const RECT& currentFrame, const FancyZonesDividers::MovedEdges& moved, HWND skipWindow);
-    void FinishEdgeResize(const ZoneIndexSet& zones, const RECT& finalFrame, const FancyZonesDividers::MovedEdges& moved);
+    void FinishEdgeResize(const ZoneIndexSet& zones, const RECT& finalFrame, const FancyZonesDividers::MovedEdges& moved, HWND draggedWindow = nullptr);
     void DiscardUnmodifiedWorkingLayout();
     void ShowResizeCue(HWND draggedWindow, bool atBase);
 
-    // Moves every snapped window (except skipWindow) into its zones with a single async SetWindowPos.
+    // Moves snapped windows (except skipWindow) into their zones with a single async SetWindowPos each.
+    // With previousZones, only windows whose combined zone rect differs from previousZones are moved.
     // Skips hidden, minimized, maximized and cloaked windows. Safe for the live resize path.
-    void RepositionSnappedWindows(HWND skipWindow = nullptr);
+    void RepositionSnappedWindows(HWND skipWindow = nullptr, const ZonesMap* previousZones = nullptr);
+
+    // True when the combined rect of zones differs between the two zone maps (or a zone is missing from either).
+    static bool ZonesRectChanged(const ZonesMap& before, const ZonesMap& after, const ZoneIndexSet& zones);
 
     bool Snap(HWND window, const ZoneIndexSet& zones, bool updatePosition = true);
     bool Unsnap(HWND window);
@@ -84,6 +93,7 @@ protected:
 
 private:
     bool InitWindow(HINSTANCE hinstance);
+    void RepositionWindow(HWND window, const ZoneIndexSet& zones);
     EdgeResizeResult ApplyEdgeResizeInternal(const ZoneIndexSet& zones, const RECT& currentFrame, const FancyZonesDividers::MovedEdges& moved, HWND skipWindow, bool reposition);
     void InitLayout(const FancyZonesDataTypes::WorkAreaId& parentUniqueId);
     

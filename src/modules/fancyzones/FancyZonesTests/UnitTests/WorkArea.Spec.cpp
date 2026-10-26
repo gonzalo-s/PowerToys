@@ -536,6 +536,11 @@ namespace FancyZonesUnitTests
             return moved;
         }
 
+        FancyZonesDataTypes::GridLayoutInfo BaseGrid() const
+        {
+            return LayoutConfigurator::GridInfo(AppliedLayouts::instance().GetDeviceLayout(m_workAreaId).value(), m_workAreaRect).value();
+        }
+
     public:
         TEST_METHOD (GridLayoutSupportsEdgeResize)
         {
@@ -575,27 +580,105 @@ namespace FancyZonesUnitTests
         {
             const auto result = m_workArea->ApplyEdgeResize({ 0 }, RECT{ -100, 0, 960, 540 }, Left(), nullptr);
             Assert::IsFalse(result.changed);
+            Assert::IsFalse(result.dividerDragged);
+            Assert::IsTrue(result.outerEdgeMoved);
             Assert::AreEqual(0L, m_workArea->GetLayout()->Zones().at(0).GetZoneRect().left);
+
+            // an outer-edge-only resize is the natural FancyZones resize: no working layout entry is created
+            Assert::IsNull(WorkingLayouts::instance().Find(m_workAreaId, m_workArea->GetLayoutId(), BaseGrid()));
+        }
+
+        TEST_METHOD (DividerEdgeReportsDividerDragged)
+        {
+            const auto result = m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 1160, 540 }, Right(), nullptr);
+            Assert::IsTrue(result.dividerDragged);
+            Assert::IsFalse(result.outerEdgeMoved);
+        }
+
+        TEST_METHOD (CornerWithOuterEdgeReportsBoth)
+        {
+            // zone 0: the right edge is on a divider, the top edge is on the work-area border
+            FancyZonesDividers::MovedEdges moved;
+            moved.right = true;
+            moved.top = true;
+            const auto result = m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, -50, 1160, 540 }, moved, nullptr);
+            Assert::IsTrue(result.changed);
+            Assert::IsTrue(result.dividerDragged);
+            Assert::IsTrue(result.outerEdgeMoved);
+            // the outer edge is not a divider: the top row keeps its position
+            Assert::AreEqual(0L, m_workArea->GetLayout()->Zones().at(0).GetZoneRect().top);
+        }
+
+        TEST_METHOD (FinishWithOnlyOuterEdgeLeavesLayoutAlone)
+        {
+            const ZonesMap before = m_workArea->GetLayout()->Zones();
+            m_workArea->FinishEdgeResize({ 0 }, RECT{ -100, 0, 960, 540 }, Left());
+
+            Assert::IsNull(WorkingLayouts::instance().Find(m_workAreaId, m_workArea->GetLayoutId(), BaseGrid()));
+            const auto& after = m_workArea->GetLayout()->Zones();
+            Assert::AreEqual(before.size(), after.size());
+            for (const auto& [id, zone] : before)
+            {
+                const RECT a = zone.GetZoneRect();
+                const RECT b = after.at(id).GetZoneRect();
+                Assert::IsTrue(EqualRect(&a, &b) != FALSE);
+            }
+        }
+
+        TEST_METHOD (ZonesRectChangedDetectsMovedDivider)
+        {
+            const ZonesMap before = m_workArea->GetLayout()->Zones();
+            m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 1160, 540 }, Right(), nullptr);
+            const ZonesMap after = m_workArea->GetLayout()->Zones();
+
+            Assert::IsTrue(WorkArea::ZonesRectChanged(before, after, { 0 }));
+            Assert::IsTrue(WorkArea::ZonesRectChanged(before, after, { 1 }));
+            Assert::IsTrue(WorkArea::ZonesRectChanged(before, after, { 2 }));
+            Assert::IsTrue(WorkArea::ZonesRectChanged(before, after, { 3 }));
+            // a window spanning the whole top row keeps its combined rect
+            Assert::IsFalse(WorkArea::ZonesRectChanged(before, after, { 0, 1 }));
+        }
+
+        TEST_METHOD (ZonesRectChangedFalseWhenNothingMoved)
+        {
+            const ZonesMap before = m_workArea->GetLayout()->Zones();
+            // left edge of zone 0 is on the work-area border: nothing moves
+            m_workArea->ApplyEdgeResize({ 0 }, RECT{ -100, 0, 960, 540 }, Left(), nullptr);
+            const ZonesMap after = m_workArea->GetLayout()->Zones();
+
+            Assert::IsFalse(WorkArea::ZonesRectChanged(before, after, { 0 }));
+            Assert::IsFalse(WorkArea::ZonesRectChanged(before, after, { 3 }));
+            Assert::IsFalse(WorkArea::ZonesRectChanged(before, after, { 1, 3 }));
+            // a zone missing from either map counts as changed
+            Assert::IsTrue(WorkArea::ZonesRectChanged(before, ZonesMap{}, { 0 }));
         }
 
         TEST_METHOD (DividerIsClampedToMinimumZoneSize)
         {
             m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 1900, 540 }, Right(), nullptr);
             const auto& zones = m_workArea->GetLayout()->Zones();
-            // the right zone keeps at least the minimum track size: max(200 px, 10% of 1920) = 200 px
-            Assert::IsTrue(zones.at(1).GetZoneRect().right - zones.at(1).GetZoneRect().left >= 199);
-            Assert::IsTrue(zones.at(1).GetZoneRect().right - zones.at(1).GetZoneRect().left <= 201);
+            // the right zone keeps at least the fixed minimum track size of 50 px (260 units of 1920 px = 49.9 px)
+            const long width = zones.at(1).GetZoneRect().right - zones.at(1).GetZoneRect().left;
+            Assert::IsTrue(width >= 49 && width <= 51);
         }
 
-        TEST_METHOD (MinimumZoneSizeScalesWithWorkArea)
+        TEST_METHOD (DividerIsClampedToMinimumZoneSizeOnTheLeft)
         {
-            // 10% of a 3840 px wide work area (384 px) is above the 200 px floor
+            m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 10, 540 }, Right(), nullptr);
+            const auto& zones = m_workArea->GetLayout()->Zones();
+            const long width = zones.at(0).GetZoneRect().right - zones.at(0).GetZoneRect().left;
+            Assert::IsTrue(width >= 49 && width <= 51);
+        }
+
+        TEST_METHOD (MinimumZoneSizeIsFixedOnLargeWorkArea)
+        {
+            // the minimum does not scale with the work area: 50 px also on a 3840 px wide work area
             m_workArea.reset();
             m_workArea = WorkArea::Create({}, m_workAreaId, {}, FancyZonesUtils::Rect(RECT(0, 0, 3840, 2160)));
             m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 3800, 1080 }, Right(), nullptr);
             const auto& zones = m_workArea->GetLayout()->Zones();
             const long width = zones.at(1).GetZoneRect().right - zones.at(1).GetZoneRect().left;
-            Assert::IsTrue(width >= 383 && width <= 385);
+            Assert::IsTrue(width >= 49 && width <= 51);
         }
 
         TEST_METHOD (FinishRemovesEntryWhenBackAtBase)
