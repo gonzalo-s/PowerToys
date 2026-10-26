@@ -624,5 +624,163 @@ namespace FancyZonesUnitTests
             Assert::IsFalse(a.right);
             Assert::IsFalse(a.top);
         }
+
+        // ---- Occupancy (wave 7): empty zones are transparent ----
+        // Units used below: min 260 (50 px of 1920), snap radius 104 (20 px of 1920).
+
+        static OccupiedFn Only(std::vector<ZoneIndex> ids)
+        {
+            return [ids](ZoneIndex id) { return std::find(ids.begin(), ids.end(), id) != ids.end(); };
+        }
+
+        TEST_METHOD (SingleWindowExpandsOverEmptyZones)
+        {
+            // The user's case: four 2500 columns, only zone 0 holds a window.
+            const auto four = OneRow({ 2500, 2500, 2500, 2500 });
+
+            // to the 75 % line (another original line, 0 away): exactly 7500, nothing else moves
+            ZoneRectModel model(four);
+            auto outcome = model.MoveEdge({ 0 }, Side::Right, 7500, 260, 104, Only({ 0 }));
+            AssertMoved(outcome);
+            AssertSnapped(outcome, 7500, false);
+            Assert::IsFalse(outcome.clamped);
+            Assert::AreEqual(7500, model.Current().at(0).right);
+            AssertAtBase(model, 1);
+            AssertAtBase(model, 2);
+            AssertAtBase(model, 3);
+
+            // 7300: 200 from 7500 (> 104): exactly 7300
+            ZoneRectModel free(four);
+            outcome = free.MoveEdge({ 0 }, Side::Right, 7300, 260, 104, Only({ 0 }));
+            AssertMoved(outcome);
+            Assert::IsFalse(outcome.snapped);
+            Assert::IsFalse(outcome.clamped);
+            Assert::AreEqual(7300, outcome.position);
+            Assert::AreEqual(7300, free.Current().at(0).right);
+
+            // 9990: nothing is pushed, the side stops min before the border: 10000 - 260 = 9740 (it stays an inner side)
+            outcome = free.MoveEdge({ 0 }, Side::Right, 9990, 260, 104, Only({ 0 }));
+            AssertMoved(outcome);
+            Assert::IsTrue(outcome.clamped);
+            Assert::AreEqual(9740, outcome.position);
+            Assert::AreEqual(9740, free.Current().at(0).right);
+            AssertAtBase(free, 3);
+
+            // and back (contract, no occupied neighbour): exactly where requested
+            outcome = free.MoveEdge({ 0 }, Side::Right, 6000, 260, 104, Only({ 0 }));
+            AssertMoved(outcome);
+            Assert::AreEqual(6000, free.Current().at(0).right);
+            AssertAtBase(free, 1);
+        }
+
+        TEST_METHOD (ExpandPushesOnlyOccupiedZones)
+        {
+            // zones 0 and 3 occupied: zone 0's right side to 8000 crosses the empty zones 1, 2 and pushes zone 3
+            const auto four = OneRow({ 2500, 2500, 2500, 2500 });
+            ZoneRectModel model(four);
+            auto outcome = model.MoveEdge({ 0 }, Side::Right, 8000, 260, 104, Only({ 0, 3 }));
+            AssertMoved(outcome);
+            Assert::IsFalse(outcome.clamped);
+            Assert::AreEqual(8000, model.Current().at(0).right);
+            AssertRect({ 8000, 0, 10000, 10000 }, model.Current().at(3));
+            AssertAtBase(model, 1);
+            AssertAtBase(model, 2);
+
+            // 9990: zone 3 keeps min(260, 2000, 2500) = 260: limit 10000 - 260 = 9740
+            outcome = model.MoveEdge({ 0 }, Side::Right, 9990, 260, 104, Only({ 0, 3 }));
+            Assert::IsTrue(outcome.clamped);
+            Assert::AreEqual(9740, model.Current().at(0).right);
+            Assert::AreEqual(9740, model.Current().at(3).left);
+
+            // zones 0, 2, 3 occupied: zone 2 (beyond the empty zone 1) is pushed once the side passes 5000
+            ZoneRectModel gap(four);
+            outcome = gap.MoveEdge({ 0 }, Side::Right, 6000, 260, 104, Only({ 0, 2, 3 }));
+            AssertMoved(outcome);
+            Assert::AreEqual(6000, gap.Current().at(0).right);
+            AssertRect({ 6000, 0, 7500, 10000 }, gap.Current().at(2));
+            AssertAtBase(gap, 1);
+            AssertAtBase(gap, 3);
+        }
+
+        TEST_METHOD (ExpandIntoOccupiedNeighbourClampsAtItsMinimum)
+        {
+            // zones 0 and 1 occupied (2 and 3 empty): zone 1 follows as before
+            const auto four = OneRow({ 2500, 2500, 2500, 2500 });
+            ZoneRectModel model(four);
+            auto outcome = model.MoveEdge({ 0 }, Side::Right, 4000, 260, 104, Only({ 0, 1 }));
+            AssertMoved(outcome);
+            Assert::AreEqual(4000, model.Current().at(0).right);
+            AssertRect({ 4000, 0, 5000, 10000 }, model.Current().at(1));
+
+            // past zone 1's right side: zone 1 is squeezed to 260 (its right side 5000 does not move: zone 2 is empty
+            // and transparent): limit 5000 - 260 = 4740
+            outcome = model.MoveEdge({ 0 }, Side::Right, 6000, 260, 104, Only({ 0, 1 }));
+            AssertMoved(outcome);
+            Assert::IsTrue(outcome.clamped);
+            Assert::AreEqual(4740, outcome.position);
+            AssertRect({ 4740, 0, 5000, 10000 }, model.Current().at(1));
+            AssertAtBase(model, 2);
+        }
+
+        TEST_METHOD (ContractPullsOnlyOccupiedNeighbours)
+        {
+            const auto halves = OneRow({ 5000, 5000 });
+
+            // zone 1 occupied: it follows the wall
+            ZoneRectModel model(halves);
+            auto outcome = model.MoveEdge({ 0 }, Side::Right, 2500, 260, 104, Only({ 0, 1 }));
+            AssertMoved(outcome);
+            Assert::AreEqual(2500, model.Current().at(0).right);
+            Assert::AreEqual(2500, model.Current().at(1).left);
+
+            // zone 1 empty: only the dragged side moves
+            ZoneRectModel alone(halves);
+            outcome = alone.MoveEdge({ 0 }, Side::Right, 2500, 260, 104, Only({ 0 }));
+            AssertMoved(outcome);
+            Assert::AreEqual(2500, alone.Current().at(0).right);
+            AssertAtBase(alone, 1);
+
+            // contracting below the dragged zone's own minimum: clamped at 0 + 260
+            outcome = alone.MoveEdge({ 0 }, Side::Right, 100, 260, 104, Only({ 0 }));
+            Assert::IsTrue(outcome.clamped);
+            Assert::AreEqual(260, alone.Current().at(0).right);
+        }
+
+        TEST_METHOD (MergedMiddleZoneAllOccupiedKeepsTheWallClosure)
+        {
+            // P5 with every zone occupied (explicit always-true predicate): as ClampedSnapIsNotReported, zone 0 right to
+            // 7400 snaps to 7500 but zone 1 keeps 500: 7000, and zone 3 (touching zone 1 on the same wall) follows.
+            ZoneRectModel model(P5());
+            const auto outcome = model.MoveEdge({ 0 }, Side::Right, 7400, 500, 200, [](ZoneIndex) { return true; });
+            AssertMoved(outcome);
+            Assert::IsFalse(outcome.snapped);
+            Assert::IsTrue(outcome.clamped);
+            Assert::AreEqual(7000, model.Current().at(0).right);
+            Assert::AreEqual(7000, model.Current().at(3).right);
+            Assert::AreEqual(7000, model.Current().at(1).left);
+
+            // zone 3 empty: zone 1 is pushed, zone 3 stays (a gap is left where nobody is)
+            ZoneRectModel sparse(P5());
+            sparse.MoveEdge({ 0 }, Side::Right, 4000, 500, 200, Only({ 0, 1, 2, 4 }));
+            Assert::AreEqual(4000, sparse.Current().at(0).right);
+            Assert::AreEqual(4000, sparse.Current().at(1).left);
+            AssertAtBase(sparse, 3);
+        }
+
+        TEST_METHOD (ClampedIsReportedOnlyBeyondTheLimit)
+        {
+            // G22 all occupied: zone 0 right, zone 1 keeps 500: limit 9500
+            ZoneRectModel model(G22());
+            auto outcome = model.MoveEdge({ 0 }, Side::Right, 9000, 500, 200);
+            Assert::IsFalse(outcome.clamped);
+            outcome = model.MoveEdge({ 0 }, Side::Right, 9800, 500, 200);
+            Assert::IsTrue(outcome.clamped);
+            Assert::AreEqual(9500, outcome.position);
+            // already at the limit: Unchanged, still clamped (the live drag keeps being held there)
+            outcome = model.MoveEdge({ 0 }, Side::Right, 9900, 500, 200);
+            AssertUnchanged(outcome);
+            Assert::IsTrue(outcome.clamped);
+            Assert::AreEqual(9500, outcome.position);
+        }
     };
 }

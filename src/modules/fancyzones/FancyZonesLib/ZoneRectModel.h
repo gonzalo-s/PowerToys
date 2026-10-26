@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <map>
 #include <optional>
 #include <vector>
@@ -72,7 +73,12 @@ namespace FancyZonesZoneRects
         bool snapped = false; // the side ended exactly on an original gridline that was within the snap radius
         int snappedPosition = 0; // that gridline (units), valid when snapped
         bool ownBaseLine = false; // that gridline is the dragged block's own base side position
+        bool clamped = false; // the requested position lies beyond a clamp limit and the side stopped at that limit
+        int position = 0; // where the side ended (units), also when Unchanged (then it is the current wall)
     };
+
+    // True when a zone holds at least one window. Empty zones are transparent to MoveEdge.
+    using OccupiedFn = std::function<bool(ZoneIndex)>;
 
     // An original gridline a dragged side is snapped to (magnet), as reported to the resize cue.
     struct EdgeSnap
@@ -122,10 +128,14 @@ namespace FancyZonesZoneRects
 
         // Moves one side of the block formed by zones (the dragged window's zone set) to position. Magnet: the side
         // snaps to the nearest original gridline on its axis (InnerCoordinates of the base rects) within snapRadius;
-        // on a tie the block's own base side position wins, then the lower coordinate. Then it is clamped so that
-        // every zone on either side of the moved wall keeps at least min(minSize, its current size, its base size)
-        // (negative minSize = 0). The outcome reports the snap only when the clamped position is the snapped line.
-        MoveOutcome MoveEdge(const ZoneIndexSet& zones, Side side, int position, int minSize, int snapRadius);
+        // on a tie the block's own base side position wins, then the lower coordinate. Only occupied zones take part
+        // (occupied empty = every zone; the dragged zones always count as occupied); empty zones are left untouched
+        // and may end up covered. Expanding pushes every occupied zone overlapping the swept strip (its far side moves
+        // to the target; zones sharing a pushed zone's old far side follow); contracting pulls the occupied zones on
+        // the wall. Clamp: every moving zone keeps at least min(minSize, its current size, its base size) (negative
+        // minSize = 0); without a pushed zone an expanding side stops minSize before the work-area border. The outcome
+        // reports the snap only when the clamped position is the snapped line.
+        MoveOutcome MoveEdge(const ZoneIndexSet& zones, Side side, int position, int minSize, int snapRadius, const OccupiedFn& occupied = {});
 
         // False when the side of the block lies on the work-area border (or a zone id is unknown).
         bool HasNeighbour(const ZoneIndexSet& zones, Side side) const;

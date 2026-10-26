@@ -507,6 +507,24 @@ namespace FancyZonesUnitTests
             AppliedLayouts::instance().ApplyLayout(m_workAreaId, layout);
 
             m_workArea = WorkArea::Create({}, m_workAreaId, {}, m_workAreaRect);
+            OccupyAll();
+        }
+
+        // Only zones holding a window take part in an edge resize: assign a (fake, never shown) window to zones.
+        void OccupyZones(const ZoneIndexSet& ids)
+        {
+            for (ZoneIndex id : ids)
+            {
+                m_workArea->Snap(Mocks::Window(), { id }, false);
+            }
+        }
+
+        void OccupyAll()
+        {
+            for (const auto& entry : m_workArea->GetLayout()->Zones())
+            {
+                OccupyZones({ entry.first });
+            }
         }
 
         TEST_METHOD_CLEANUP(CleanUp) noexcept
@@ -560,6 +578,7 @@ namespace FancyZonesUnitTests
             };
             AppliedLayouts::instance().ApplyLayout(m_workAreaId, layout);
             m_workArea->InitLayout();
+            OccupyAll();
         }
 
     public:
@@ -720,6 +739,7 @@ namespace FancyZonesUnitTests
             // the minimum does not scale with the work area: 50 px also on a 3840 px wide work area
             m_workArea.reset();
             m_workArea = WorkArea::Create({}, m_workAreaId, {}, FancyZonesUtils::Rect(RECT(0, 0, 3840, 2160)));
+            OccupyAll();
             m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 3800, 1080 }, Right(), nullptr);
             const auto& zones = m_workArea->GetActiveZones();
             const long width = zones.at(1).GetZoneRect().right - zones.at(1).GetZoneRect().left;
@@ -890,6 +910,7 @@ namespace FancyZonesUnitTests
                         WorkingLayouts::instance().Clear();
                         m_workArea.reset();
                         m_workArea = WorkArea::Create({}, m_workAreaId, {}, FancyZonesUtils::Rect(RECT(0, 0, width, 1080)));
+                        OccupyAll();
 
                         const auto result = m_workArea->ApplyEdgeResize({ 0 }, RECT{ spacing, spacing, frameRight, 500 }, Right(), nullptr);
                         Assert::IsTrue(result.changed);
@@ -1086,7 +1107,7 @@ namespace FancyZonesUnitTests
             return static_cast<int>(500000LL / length);
         }
 
-        void RecreateWorkArea(FancyZonesDataTypes::ZoneSetLayoutType type, int zoneCount, int spacing, long width, long height)
+        void RecreateWorkArea(FancyZonesDataTypes::ZoneSetLayoutType type, int zoneCount, int spacing, long width, long height, bool occupyAll = true)
         {
             WorkingLayouts::instance().Clear();
             LayoutData layout{
@@ -1100,6 +1121,10 @@ namespace FancyZonesUnitTests
             AppliedLayouts::instance().ApplyLayout(m_workAreaId, layout);
             m_workArea.reset();
             m_workArea = WorkArea::Create({}, m_workAreaId, {}, FancyZonesUtils::Rect(RECT(0, 0, width, height)));
+            if (occupyAll)
+            {
+                OccupyAll();
+            }
         }
 
         RECT ActiveRect(ZoneIndex zone) const
@@ -1204,8 +1229,10 @@ namespace FancyZonesUnitTests
             ZoneIndex zone; // the dragged window's zone
             FancyZonesZoneRects::Side side;
             ZoneIndex neighbour; // a zone on the other side of the wall
-            int lowFarUnits; // far side of the zones below the wall (their low end, the wall's lower limit is it + min)
-            int highFarUnits; // far side of the zones above the wall (their high end, the upper limit is it - min)
+            int lowFarUnits; // every zone occupied: far side of the moving zones below the wall (lower limit = it + min)
+            int highFarUnits; // every zone occupied: far side of the moving zones above the wall (upper limit = it - min)
+            int singleLowFarUnits; // only the dragged window: the same limits (empty zones are transparent; work-area
+            int singleHighFarUnits; // border or the dragged zone's own far side)
             std::vector<int> lineUnits; // original gridlines on the side's axis
         };
 
@@ -1217,28 +1244,35 @@ namespace FancyZonesUnitTests
             using FancyZonesZoneRects::Side;
             return {
                 // Grid 4: zone 0 right / zone 1 left move the top-row wall between 0..10000; bottom/top likewise.
-                { ZoneSetLayoutType::Grid, 4, 0, Side::Right, 1, 0, 10000, { 5000 } },
-                { ZoneSetLayoutType::Grid, 4, 1, Side::Left, 0, 0, 10000, { 5000 } },
-                { ZoneSetLayoutType::Grid, 4, 0, Side::Bottom, 2, 0, 10000, { 5000 } },
-                { ZoneSetLayoutType::Grid, 4, 3, Side::Top, 1, 0, 10000, { 5000 } },
-                // PriorityGrid 5: zone 0 right pulls zone 3 in (both touch zone 1): wall between 0 and zone 1's right
-                // (7500); zone 2 left (with zone 4) between zone 1's left (2500) and 10000; zone 1 left between 0 and 7500.
-                { ZoneSetLayoutType::PriorityGrid, 5, 0, Side::Right, 1, 0, 7500, { 2500, 7500 } },
-                { ZoneSetLayoutType::PriorityGrid, 5, 2, Side::Left, 1, 2500, 10000, { 2500, 7500 } },
-                { ZoneSetLayoutType::PriorityGrid, 5, 1, Side::Left, 0, 0, 7500, { 2500, 7500 } },
-                { ZoneSetLayoutType::PriorityGrid, 5, 0, Side::Bottom, 3, 0, 10000, { 5000 } },
-                { ZoneSetLayoutType::PriorityGrid, 5, 4, Side::Top, 2, 0, 10000, { 5000 } },
+                // Alone, the dragged side is limited by the border (expanding) and its own far side (contracting): the
+                // same numbers.
+                { ZoneSetLayoutType::Grid, 4, 0, Side::Right, 1, 0, 10000, 0, 10000, { 5000 } },
+                { ZoneSetLayoutType::Grid, 4, 1, Side::Left, 0, 0, 10000, 0, 10000, { 5000 } },
+                { ZoneSetLayoutType::Grid, 4, 0, Side::Bottom, 2, 0, 10000, 0, 10000, { 5000 } },
+                { ZoneSetLayoutType::Grid, 4, 3, Side::Top, 1, 0, 10000, 0, 10000, { 5000 } },
+                // PriorityGrid 5, all occupied: zone 0 right pulls zone 3 in (both touch zone 1): wall between 0 and
+                // zone 1's right (7500); zone 2 left (with zone 4) between zone 1's left (2500) and 10000; zone 1 left
+                // between 0 and 7500. Alone: zone 0 right and zone 2 left reach the border on the far side (zone 1 is
+                // empty); zone 1 left keeps its own right side (7500) as the upper limit.
+                { ZoneSetLayoutType::PriorityGrid, 5, 0, Side::Right, 1, 0, 7500, 0, 10000, { 2500, 7500 } },
+                { ZoneSetLayoutType::PriorityGrid, 5, 2, Side::Left, 1, 2500, 10000, 0, 10000, { 2500, 7500 } },
+                { ZoneSetLayoutType::PriorityGrid, 5, 1, Side::Left, 0, 0, 7500, 0, 7500, { 2500, 7500 } },
+                { ZoneSetLayoutType::PriorityGrid, 5, 0, Side::Bottom, 3, 0, 10000, 0, 10000, { 5000 } },
+                { ZoneSetLayoutType::PriorityGrid, 5, 4, Side::Top, 2, 0, 10000, 0, 10000, { 5000 } },
             };
         }
 
-        // Runs one released position through a fresh drag and checks the dragged edge and the neighbour's edge.
-        // Returns false when the position is in the ambiguous 20..21 px band of a gridline (not asserted).
-        bool CheckRelease(const SweepCase& c, int spacing, long length, long p, bool releaseAlsoLive)
+        // Runs one released position through a fresh drag and checks the dragged edge and the neighbour's edge (it
+        // follows when occupied, it stays at its base rect when empty). Returns false when the position is in the
+        // ambiguous 20..21 px band of a gridline (not asserted).
+        bool CheckRelease(const SweepCase& c, bool single, int spacing, long length, long p, bool releaseAlsoLive)
         {
             m_workArea->ResetWorkingLayout();
             const int minUnits = MinUnits(length);
             const bool high = IsHighSide(c.side);
-            const auto expected = ExpectedEdge(p, high, length, spacing, c.lineUnits, c.lowFarUnits + minUnits, c.highFarUnits - minUnits);
+            const int lowFar = single ? c.singleLowFarUnits : c.lowFarUnits;
+            const int highFar = single ? c.singleHighFarUnits : c.highFarUnits;
+            const auto expected = ExpectedEdge(p, high, length, spacing, c.lineUnits, lowFar + minUnits, highFar - minUnits);
             if (!expected)
             {
                 return false;
@@ -1248,12 +1282,14 @@ namespace FancyZonesUnitTests
 
             RECT dragged = ActiveRect(c.zone);
             RECT neighbour = ActiveRect(c.neighbour);
+            RECT baseNeighbour = m_workArea->GetLayout()->Zones().at(c.neighbour).GetZoneRect();
             const long actual = FrameEdge(dragged, c.side);
             const long actualNeighbour = FrameEdge(neighbour, Opposite(c.side));
-            const long expectedNeighbour = high ? *expected + spacing : *expected - spacing;
+            const long expectedNeighbour = single ? FrameEdge(baseNeighbour, Opposite(c.side)) : (high ? *expected + spacing : *expected - spacing);
             if (actual != *expected || actualNeighbour != expectedNeighbour)
             {
                 const std::wstring message = L"zone " + std::to_wstring(c.zone) + L" side " + std::to_wstring(static_cast<int>(c.side)) +
+                                             L" single " + std::to_wstring(single ? 1 : 0) +
                                              L" spacing " + std::to_wstring(spacing) + L" length " + std::to_wstring(length) +
                                              L" released " + std::to_wstring(p) + L" expected " + std::to_wstring(*expected) +
                                              L" actual " + std::to_wstring(actual) + L" neighbour " + std::to_wstring(actualNeighbour) +
@@ -1264,13 +1300,18 @@ namespace FancyZonesUnitTests
             return true;
         }
 
-        void RunSweep(long width, long height)
+        void RunSweep(long width, long height, bool single)
         {
             for (const auto& c : SweepCases())
             {
                 for (const int spacing : { 0, 16 })
                 {
-                    RecreateWorkArea(c.type, c.zoneCount, spacing, width, height);
+                    RecreateWorkArea(c.type, c.zoneCount, spacing, width, height, !single);
+                    if (single)
+                    {
+                        OccupyZones({ c.zone });
+                    }
+
                     const long length = IsVerticalSide(c.side) ? width : height;
                     const int minUnits = MinUnits(length);
                     int checkedCount = 0;
@@ -1280,19 +1321,21 @@ namespace FancyZonesUnitTests
                     for (long p = 0; p <= length; p += 7)
                     {
                         live = !live;
-                        checkedCount += CheckRelease(c, spacing, length, p, live) ? 1 : 0;
+                        checkedCount += CheckRelease(c, single, spacing, length, p, live) ? 1 : 0;
                     }
 
                     // every pixel around both clamp limits (window edge = limit boundary -/+ spacing / 2)
                     const long half = spacing / 2;
                     const bool high = IsHighSide(c.side);
-                    for (const long limit : { Px(length, c.lowFarUnits + minUnits), Px(length, c.highFarUnits - minUnits) })
+                    const int lowFar = single ? c.singleLowFarUnits : c.lowFarUnits;
+                    const int highFar = single ? c.singleHighFarUnits : c.highFarUnits;
+                    for (const long limit : { Px(length, lowFar + minUnits), Px(length, highFar - minUnits) })
                     {
                         const long edge = high ? limit - half : limit + half;
                         for (long p = edge - 12; p <= edge + 12; ++p)
                         {
                             live = !live;
-                            checkedCount += CheckRelease(c, spacing, length, p, live) ? 1 : 0;
+                            checkedCount += CheckRelease(c, single, spacing, length, p, live) ? 1 : 0;
                         }
                     }
 
@@ -1303,12 +1346,50 @@ namespace FancyZonesUnitTests
 
         TEST_METHOD (DragSweepReleasedEdgeIsExact1920x1080)
         {
-            RunSweep(1920, 1080);
+            RunSweep(1920, 1080, false);
         }
 
         TEST_METHOD (DragSweepReleasedEdgeIsExact3840x2160)
         {
-            RunSweep(3840, 2160);
+            RunSweep(3840, 2160, false);
+        }
+
+        // The user's reproduction generalised: a single snapped window, every other zone empty.
+        TEST_METHOD (DragSweepSingleWindowReleasedEdgeIsExact1920x1080)
+        {
+            RunSweep(1920, 1080, true);
+        }
+
+        TEST_METHOD (DragSweepSingleWindowReleasedEdgeIsExact3840x2160)
+        {
+            RunSweep(3840, 2160, true);
+        }
+
+        TEST_METHOD (SingleWindowInAQuarterColumnExpandsToThreeQuarters)
+        {
+            // The user's case: Columns 4 (2500 each: lines at 480, 960, 1440 px on 1920), one window in zone 0.
+            using FancyZonesZoneRects::Side;
+            RecreateWorkArea(FancyZonesDataTypes::ZoneSetLayoutType::Columns, 4, 0, 1920, 1080, false);
+            OccupyZones({ 0 });
+            Assert::AreEqual(480L, ActiveRect(0).right);
+
+            // released on the 75 % line: exactly 1440 px; the empty zones keep their rects
+            DragSideTo(0, Side::Right, 1440, true);
+            Assert::AreEqual(1440L, ActiveRect(0).right);
+            Assert::AreEqual(480L, ActiveRect(1).left);
+            Assert::AreEqual(960L, ActiveRect(1).right);
+            Assert::AreEqual(1440L, ActiveRect(3).left);
+
+            // 1400 px is 40 px from the 1440 line and 440 px from 960: exactly where released
+            m_workArea->ResetWorkingLayout();
+            DragSideTo(0, Side::Right, 1400, false);
+            Assert::AreEqual(1400L, ActiveRect(0).right);
+            Assert::AreEqual(480L, ActiveRect(1).left);
+
+            // near the border: nothing is pushed, the side stops 50 px before it: 10000 - 260 = 9740 -> 1870 px
+            DragSideTo(0, Side::Right, 1915, true);
+            Assert::AreEqual(1870L, ActiveRect(0).right);
+            Assert::AreEqual(1440L, ActiveRect(3).left);
         }
 
         TEST_METHOD (ClampLimitsAreFiftyPixelsFromTheNeighboursFarSide)

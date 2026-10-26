@@ -484,6 +484,9 @@ EdgeResizeResult WorkArea::ApplyEdgeResizeInternal(const ZoneIndexSet& zones, co
         }
     };
 
+    // Only zones holding a window take part; the dragged window's own zones always do (see ZoneRectModel::MoveEdge).
+    const FancyZonesZoneRects::OccupiedFn occupied = [this](ZoneIndex id) { return !m_layoutWindows.IsZoneEmpty(id); };
+
     for (const auto& dragged : sides)
     {
         if (!dragged.moved || dragged.length <= 0 || !model.HasNeighbour(zones, dragged.side))
@@ -495,7 +498,7 @@ EdgeResizeResult WorkArea::ApplyEdgeResizeInternal(const ZoneIndexSet& zones, co
         const int position = static_cast<int>(CeilDiv(static_cast<long long>(dragged.edge) * TotalUnits, dragged.length));
         const int minSize = static_cast<int>(static_cast<long long>(MinSizePx) * TotalUnits / dragged.length);
         const int snapRadius = static_cast<int>(static_cast<long long>(SnapRadiusPx) * TotalUnits / dragged.length);
-        const auto outcome = model.MoveEdge(zones, dragged.side, position, minSize, snapRadius);
+        const auto outcome = model.MoveEdge(zones, dragged.side, position, minSize, snapRadius, occupied);
         if (outcome.result == MoveResult::Moved)
         {
             result.changed = true;

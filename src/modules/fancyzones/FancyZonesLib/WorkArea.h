@@ -75,7 +75,8 @@ public:
     void UpdateWindowPositions(HWND skipWindow = nullptr);
 
     // Dynamic grid resize. Frames are visible window frames in screen coordinates. An inner edge moves only the zone
-    // wall segment it touches (the zones on both sides of it). Edges on the work-area border keep the natural
+    // wall segment it touches (the occupied zones on both sides of it; zones without a window are transparent and
+    // may be covered by an expanding window). Edges on the work-area border keep the natural
     // FancyZones behaviour: no entry, no other window moves. The resize changes only the working zones (window
     // positions), never the layout's own zones.
     // FinishEdgeResize repositions only windows whose zones changed; the dragged window is placed into its zones

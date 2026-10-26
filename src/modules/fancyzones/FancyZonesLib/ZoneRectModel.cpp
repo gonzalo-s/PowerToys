@@ -275,7 +275,7 @@ namespace FancyZonesZoneRects
         return bounds.has_value() && !OnBorder(SideOf(*bounds, side), side);
     }
 
-    MoveOutcome ZoneRectModel::MoveEdge(const ZoneIndexSet& zones, Side side, int position, int minSize, int snapRadius)
+    MoveOutcome ZoneRectModel::MoveEdge(const ZoneIndexSet& zones, Side side, int position, int minSize, int snapRadius, const OccupiedFn& occupied)
     {
         const auto bounds = BoundsOf(zones);
         const auto baseBounds = BaseBoundsOf(zones);
@@ -292,55 +292,90 @@ namespace FancyZonesZoneRects
 
         const bool vertical = IsVertical(side);
         const bool high = IsHighSide(side);
+        const int outward = high ? 1 : -1; // direction in which the dragged side grows its block
 
-        // A: zones whose moved side lies on the wall (the dragged block's zones on that side plus the zones pulled in);
-        // B: zones on the other side of the wall whose opposite side lies on it and that touch A along the wall.
-        const auto edgeA = [&](const UnitRect& rect) { return high ? High(rect, vertical) : Low(rect, vertical); };
-        const auto edgeB = [&](const UnitRect& rect) { return high ? Low(rect, vertical) : High(rect, vertical); };
+        // near edge: the side of a rect facing the same way as the dragged side; far edge: the opposite side.
+        const auto nearEdge = [&](const UnitRect& rect) { return high ? High(rect, vertical) : Low(rect, vertical); };
+        const auto farEdge = [&](const UnitRect& rect) { return high ? Low(rect, vertical) : High(rect, vertical); };
+        // a lies strictly beyond b in the outward direction
+        const auto beyond = [outward](int a, int b) { return outward * (a - b) > 0; };
+        const auto isDragged = [&zones](ZoneIndex id) { return std::find(zones.begin(), zones.end(), id) != zones.end(); };
+        // Empty zones (no window) are transparent: never pushed, never pulled, never clamping, left untouched.
+        const auto isOccupied = [&](ZoneIndex id) { return isDragged(id) || !occupied || occupied(id); };
         const auto touches = [&](const std::set<ZoneIndex>& group, const UnitRect& rect) {
             return std::any_of(group.begin(), group.end(), [&](ZoneIndex id) { return OverlapsAlongWall(m_current.at(id), rect, vertical); });
         };
-        const auto isDragged = [&zones](ZoneIndex id) { return std::find(zones.begin(), zones.end(), id) != zones.end(); };
 
-        std::set<ZoneIndex> a;
+        // The dragged block's zones whose side lies on the wall.
+        std::set<ZoneIndex> dragged;
         for (ZoneIndex id : zones)
         {
-            if (edgeA(m_current.at(id)) == wall)
+            if (nearEdge(m_current.at(id)) == wall)
             {
-                a.insert(id);
+                dragged.insert(id);
             }
         }
 
-        // Grow both sides to a fixpoint: a zone spanning several zones on the other side pulls all of them in.
-        std::set<ZoneIndex> b;
-        bool grew = true;
-        while (grew)
+        // Zones moving with the wall for a target t: a = near edge moves to t, b = far edge moves to t.
+        struct Groups
         {
-            grew = false;
-            for (const auto& [id, rect] : m_current)
-            {
-                if (a.contains(id) || b.contains(id))
-                {
-                    continue;
-                }
+            std::set<ZoneIndex> a;
+            std::set<ZoneIndex> b;
+        };
 
-                if (edgeB(rect) == wall && !isDragged(id) && touches(a, rect))
+        const auto groupsFor = [&](int t) {
+            Groups groups{ dragged, {} };
+            bool grew = true;
+            while (grew)
+            {
+                grew = false;
+                for (const auto& [id, rect] : m_current)
                 {
-                    b.insert(id);
-                    grew = true;
-                }
-                else if (edgeA(rect) == wall && touches(b, rect))
-                {
-                    a.insert(id);
-                    grew = true;
+                    if (groups.a.contains(id) || groups.b.contains(id) || !isOccupied(id))
+                    {
+                        continue;
+                    }
+
+                    if (beyond(t, wall))
+                    {
+                        // Expand (push): an occupied zone lying beyond the old near edge of a moving zone, overlapping it
+                        // along the wall and starting before t, is pushed (its far edge moves to t).
+                        const bool pushed = !isDragged(id) && beyond(t, farEdge(rect)) &&
+                                            std::any_of(groups.a.begin(), groups.a.end(), [&](ZoneIndex m) {
+                                                const UnitRect& moving = m_current.at(m);
+                                                return !beyond(nearEdge(moving), farEdge(rect)) && OverlapsAlongWall(moving, rect, vertical);
+                                            });
+                        // A zone whose near edge is the old far edge of a pushed zone (and overlaps it) follows the wall.
+                        const bool follows = !pushed && std::any_of(groups.b.begin(), groups.b.end(), [&](ZoneIndex p) {
+                                                 const UnitRect& pushedRect = m_current.at(p);
+                                                 return nearEdge(rect) == farEdge(pushedRect) && OverlapsAlongWall(pushedRect, rect, vertical);
+                                             });
+                        if (pushed || follows)
+                        {
+                            (pushed ? groups.b : groups.a).insert(id);
+                            grew = true;
+                        }
+                    }
+                    else if (beyond(wall, t))
+                    {
+                        // Contract: the occupied zones on the other side of the wall that touch the moving zones follow
+                        // (closure: a zone spanning several zones on the other side pulls all of them in).
+                        if (farEdge(rect) == wall && !isDragged(id) && touches(groups.a, rect))
+                        {
+                            groups.b.insert(id);
+                            grew = true;
+                        }
+                        else if (nearEdge(rect) == wall && touches(groups.b, rect))
+                        {
+                            groups.a.insert(id);
+                            grew = true;
+                        }
+                    }
                 }
             }
-        }
 
-        if (b.empty())
-        {
-            return { MoveResult::Unchanged }; // inconsistent tiling
-        }
+            return groups;
+        };
 
         // Magnet: the nearest original gridline on this axis within snapRadius (before the clamp, which still wins).
         // Tie: the block's own base side position, then the lower coordinate (candidates are sorted ascending).
@@ -364,7 +399,8 @@ namespace FancyZonesZoneRects
             }
         }
 
-        int target = snapLine.value_or(position);
+        const int requested = snapLine.value_or(position);
+        int target = requested;
 
         // Per-zone minimum: a zone already smaller than minSize may grow but never shrinks below the smaller of its
         // current and its base size, so it does not force the wall to jump and can return to its base size.
@@ -375,26 +411,63 @@ namespace FancyZonesZoneRects
             return (std::min)({ effectiveMin, current, base });
         };
 
-        // Zones below the wall (their high end is on it) bound it from below, zones above it bound it from above.
-        const auto& lowSide = high ? a : b;
-        const auto& highSide = high ? b : a;
-        int low = (std::numeric_limits<int>::min)();
-        int top = (std::numeric_limits<int>::max)();
-        for (ZoneIndex id : lowSide)
+        Groups groups;
+        if (beyond(target, wall))
         {
-            low = (std::max)(low, Low(m_current.at(id), vertical) + minFor(id));
-        }
-        for (ZoneIndex id : highSide)
-        {
-            top = (std::min)(top, High(m_current.at(id), vertical) - minFor(id));
-        }
+            // Expand. When nothing is pushed (only empty zones ahead) the side may go up to the work-area border minus
+            // the minimum size, so it stays an inner side; it is never forced back if it already is closer to the border.
+            int borderLimit = high ? TotalUnits - effectiveMin : effectiveMin;
+            if (beyond(wall, borderLimit))
+            {
+                borderLimit = wall;
+            }
 
-        if (low > top)
-        {
-            return { MoveResult::Unchanged }; // defensive only: the current wall position always satisfies both bounds
-        }
+            if (groupsFor(target).b.empty() && beyond(target, borderLimit))
+            {
+                target = borderLimit; // the pushed set can only shrink as the target moves back: it stays empty
+            }
 
-        target = std::clamp(target, low, top);
+            // Every pushed zone keeps its minimum: t may not pass its near edge minus that minimum. The pushed set only
+            // shrinks when t moves back toward the wall, so iterating to the fixpoint gives the farthest feasible t.
+            while (true)
+            {
+                groups = groupsFor(target);
+                int limit = target;
+                for (ZoneIndex id : groups.b)
+                {
+                    const int bound = nearEdge(m_current.at(id)) - outward * minFor(id);
+                    if (beyond(limit, bound))
+                    {
+                        limit = bound;
+                    }
+                }
+
+                if (limit == target)
+                {
+                    break;
+                }
+
+                target = limit;
+            }
+        }
+        else if (beyond(wall, target))
+        {
+            // Contract: every zone whose near edge moves (the dragged zones and the zones pulled in) keeps its minimum.
+            groups = groupsFor(target);
+            for (ZoneIndex id : groups.a)
+            {
+                const int bound = farEdge(m_current.at(id)) + outward * minFor(id);
+                if (beyond(bound, target))
+                {
+                    target = bound;
+                }
+            }
+
+            if (beyond(target, wall))
+            {
+                target = wall; // defensive only: the current wall position always satisfies the minimum
+            }
+        }
 
         MoveOutcome outcome;
         if (snapLine && target == *snapLine)
@@ -405,18 +478,25 @@ namespace FancyZonesZoneRects
             outcome.ownBaseLine = *snapLine == basePosition;
         }
 
+        // Clamped: the side stopped at a limit that the requested (raw) position lies beyond, and no snap inside the
+        // limit took it there.
+        outcome.clamped = target != requested && position != target && ((position > target) == (requested > target));
+        outcome.position = target;
+
         if (target == wall)
         {
             outcome.result = MoveResult::Unchanged;
             return outcome;
         }
 
-        for (ZoneIndex id : a)
+        // the groups of the final target (contract groups do not depend on t)
+        groups = groupsFor(target);
+        for (ZoneIndex id : groups.a)
         {
             UnitRect& rect = m_current.at(id);
             (high ? High(rect, vertical) : Low(rect, vertical)) = target;
         }
-        for (ZoneIndex id : b)
+        for (ZoneIndex id : groups.b)
         {
             UnitRect& rect = m_current.at(id);
             (high ? Low(rect, vertical) : High(rect, vertical)) = target;
