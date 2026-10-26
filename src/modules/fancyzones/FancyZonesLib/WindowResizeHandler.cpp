@@ -54,6 +54,7 @@ void WindowResizeHandler::Reset() noexcept
     m_moved = {};
     m_lastUpdateTick = 0;
     m_cueAtBase = true;
+    m_cueShown = false;
     m_workAreaId = {};
     m_layoutId = GUID_NULL;
 }
@@ -97,7 +98,8 @@ bool WindowResizeHandler::Begin(HWND window)
     m_lastFrame = frame;
     m_workAreaId = workArea->UniqueId();
     m_layoutId = workArea->GetLayoutId();
-    workArea->ShowResizeCue(window, true);
+    // No cue yet: it appears only once a divider edge is actually dragged (see Update). An outer-edge resize
+    // stays the natural FancyZones resize, without any visual change.
     return true;
 }
 
@@ -142,8 +144,9 @@ void WindowResizeHandler::Update()
     m_lastFrame = frame;
     m_lastUpdateTick = now;
 
-    if (result.atBase != m_cueAtBase)
+    if (result.dividerDragged && (!m_cueShown || result.atBase != m_cueAtBase))
     {
+        m_cueShown = true;
         m_cueAtBase = result.atBase;
         workArea->ShowResizeCue(m_window, m_cueAtBase);
     }
@@ -167,7 +170,7 @@ void WindowResizeHandler::End()
     if (ReadFrame(m_window, frame))
     {
         m_moved |= FancyZonesDividers::DetectMovedEdges(m_startFrame, frame, MovedEdgeTolerancePx);
-        workArea->FinishEdgeResize(m_zones, frame, m_moved);
+        workArea->FinishEdgeResize(m_zones, frame, m_moved, m_window);
     }
     else
     {
@@ -175,7 +178,10 @@ void WindowResizeHandler::End()
         workArea->DiscardUnmodifiedWorkingLayout();
     }
 
-    workArea->HideZones();
+    if (m_cueShown)
+    {
+        workArea->HideZones();
+    }
 
     Reset();
 }
@@ -186,7 +192,11 @@ void WindowResizeHandler::Abort()
     {
         if (auto* workArea = FindWorkArea())
         {
-            workArea->HideZones();
+            if (m_cueShown)
+            {
+                workArea->HideZones();
+            }
+
             workArea->DiscardUnmodifiedWorkingLayout();
         }
     }
