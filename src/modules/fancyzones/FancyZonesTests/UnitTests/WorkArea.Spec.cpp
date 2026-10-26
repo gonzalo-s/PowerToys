@@ -1262,6 +1262,19 @@ namespace FancyZonesUnitTests
             };
         }
 
+        // Limits (units) of the dragged edge. All occupied: both neighbours keep the minimum. Alone: toward the work-area
+        // border the limit is the border itself; only the side toward the dragged zone's own far edge keeps the minimum.
+        static std::pair<int, int> LimitUnits(const SweepCase& c, bool single, int minUnits)
+        {
+            if (!single)
+            {
+                return { c.lowFarUnits + minUnits, c.highFarUnits - minUnits };
+            }
+
+            return IsHighSide(c.side) ? std::pair<int, int>{ c.singleLowFarUnits + minUnits, c.singleHighFarUnits } :
+                                        std::pair<int, int>{ c.singleLowFarUnits, c.singleHighFarUnits - minUnits };
+        }
+
         // Runs one released position through a fresh drag and checks the dragged edge and the neighbour's edge (it
         // follows when occupied, it stays at its base rect when empty). Returns false when the position is in the
         // ambiguous 20..21 px band of a gridline (not asserted).
@@ -1270,9 +1283,8 @@ namespace FancyZonesUnitTests
             m_workArea->ResetWorkingLayout();
             const int minUnits = MinUnits(length);
             const bool high = IsHighSide(c.side);
-            const int lowFar = single ? c.singleLowFarUnits : c.lowFarUnits;
-            const int highFar = single ? c.singleHighFarUnits : c.highFarUnits;
-            const auto expected = ExpectedEdge(p, high, length, spacing, c.lineUnits, lowFar + minUnits, highFar - minUnits);
+            const auto limits = LimitUnits(c, single, minUnits);
+            const auto expected = ExpectedEdge(p, high, length, spacing, c.lineUnits, limits.first, limits.second);
             if (!expected)
             {
                 return false;
@@ -1327,9 +1339,8 @@ namespace FancyZonesUnitTests
                     // every pixel around both clamp limits (window edge = limit boundary -/+ spacing / 2)
                     const long half = spacing / 2;
                     const bool high = IsHighSide(c.side);
-                    const int lowFar = single ? c.singleLowFarUnits : c.lowFarUnits;
-                    const int highFar = single ? c.singleHighFarUnits : c.highFarUnits;
-                    for (const long limit : { Px(length, lowFar + minUnits), Px(length, highFar - minUnits) })
+                    const auto limits = LimitUnits(c, single, minUnits);
+                    for (const long limit : { Px(length, limits.first), Px(length, limits.second) })
                     {
                         const long edge = high ? limit - half : limit + half;
                         for (long p = edge - 12; p <= edge + 12; ++p)
@@ -1386,10 +1397,69 @@ namespace FancyZonesUnitTests
             Assert::AreEqual(1400L, ActiveRect(0).right);
             Assert::AreEqual(480L, ActiveRect(1).left);
 
-            // near the border: nothing is pushed, the side stops 50 px before it: 10000 - 260 = 9740 -> 1870 px
+            // near the border: nothing is pushed and the border is the limit: 1915 stays 1915, 1920 reaches the border
             DragSideTo(0, Side::Right, 1915, true);
-            Assert::AreEqual(1870L, ActiveRect(0).right);
+            Assert::AreEqual(1915L, ActiveRect(0).right);
             Assert::AreEqual(1440L, ActiveRect(3).left);
+            DragSideTo(0, Side::Right, 1920, true);
+            Assert::AreEqual(1920L, ActiveRect(0).right);
+            Assert::AreEqual(1440L, ActiveRect(3).left);
+        }
+
+        TEST_METHOD (SingleWindowReachesTheScreenBorder)
+        {
+            using FancyZonesDataTypes::ZoneSetLayoutType;
+            using FancyZonesZoneRects::Side;
+
+            // Columns 4, 1920 x 1080, one window: Right to 1920 and beyond (1930, the mouse past the screen) = 1920
+            RecreateWorkArea(ZoneSetLayoutType::Columns, 4, 0, 1920, 1080, false);
+            OccupyZones({ 0 });
+            DragSideTo(0, Side::Right, 1920, true);
+            Assert::AreEqual(1920L, ActiveRect(0).right);
+            m_workArea->ResetWorkingLayout();
+            DragSideTo(0, Side::Right, 1930, false);
+            Assert::AreEqual(1920L, ActiveRect(0).right);
+
+            // the last column's Left edge to 0 and beyond (-10): 0
+            RecreateWorkArea(ZoneSetLayoutType::Columns, 4, 0, 1920, 1080, false);
+            OccupyZones({ 3 });
+            DragSideTo(3, Side::Left, 0, true);
+            Assert::AreEqual(0L, ActiveRect(3).left);
+            m_workArea->ResetWorkingLayout();
+            DragSideTo(3, Side::Left, -10, false);
+            Assert::AreEqual(0L, ActiveRect(3).left);
+
+            // Rows 2: the top row's Bottom to 1080 and beyond (1090); the bottom row's Top to 0 and beyond (-10)
+            RecreateWorkArea(ZoneSetLayoutType::Rows, 2, 0, 1920, 1080, false);
+            OccupyZones({ 0 });
+            DragSideTo(0, Side::Bottom, 1080, true);
+            Assert::AreEqual(1080L, ActiveRect(0).bottom);
+            m_workArea->ResetWorkingLayout();
+            DragSideTo(0, Side::Bottom, 1090, false);
+            Assert::AreEqual(1080L, ActiveRect(0).bottom);
+
+            RecreateWorkArea(ZoneSetLayoutType::Rows, 2, 0, 1920, 1080, false);
+            OccupyZones({ 1 });
+            DragSideTo(1, Side::Top, 0, true);
+            Assert::AreEqual(0L, ActiveRect(1).top);
+            m_workArea->ResetWorkingLayout();
+            DragSideTo(1, Side::Top, -10, false);
+            Assert::AreEqual(0L, ActiveRect(1).top);
+        }
+
+        TEST_METHOD (PushedNeighbourAtTheBorderKeepsItsMinimum)
+        {
+            using FancyZonesDataTypes::ZoneSetLayoutType;
+            using FancyZonesZoneRects::Side;
+
+            // Columns 4, zones 0 and 3 occupied: zone 0's right edge to the border stops where zone 3 keeps 260 units:
+            // 10000 - 260 = 9740 -> floor(1920 * 9740 / 10000) = 1870 px
+            RecreateWorkArea(ZoneSetLayoutType::Columns, 4, 0, 1920, 1080, false);
+            OccupyZones({ 0, 3 });
+            DragSideTo(0, Side::Right, 1920, true);
+            Assert::AreEqual(1870L, ActiveRect(0).right);
+            Assert::AreEqual(1870L, ActiveRect(3).left);
+            Assert::AreEqual(1920L, ActiveRect(3).right);
         }
 
         TEST_METHOD (LiveClampReportsTheLimitFrame)
@@ -1430,12 +1500,15 @@ namespace FancyZonesUnitTests
             const RECT spacedLimit{ 16, 16, 2822, 1072 };
             Assert::IsTrue(EqualRect(&spacedLimit, &result.clampedFrame) != FALSE);
 
-            // a single window near the border: the 50 px margin is reported as the limit (1920 - 50 = 1870)
+            // a single window near the border: the limit is the border itself (1920), no margin
             RecreateWorkArea(FancyZonesDataTypes::ZoneSetLayoutType::Grid, 4, 0, 1920, 1080, false);
             OccupyZones({ 0 });
             result = m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 1915, 540 }, Right(), nullptr);
+            Assert::IsFalse(result.clamped);
+            Assert::AreEqual(1915L, result.clampedFrame.right);
+            result = m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 1930, 540 }, Right(), nullptr);
             Assert::IsTrue(result.clamped);
-            Assert::AreEqual(1870L, result.clampedFrame.right);
+            Assert::AreEqual(1920L, result.clampedFrame.right);
         }
 
         TEST_METHOD (ClampLimitsAreFiftyPixelsFromTheNeighboursFarSide)

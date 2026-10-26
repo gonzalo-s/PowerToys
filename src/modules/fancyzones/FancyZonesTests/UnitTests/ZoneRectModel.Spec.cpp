@@ -658,12 +658,12 @@ namespace FancyZonesUnitTests
             Assert::AreEqual(7300, outcome.position);
             Assert::AreEqual(7300, free.Current().at(0).right);
 
-            // 9990: nothing is pushed, the side stops min before the border: 10000 - 260 = 9740 (it stays an inner side)
+            // 9990: nothing is pushed and the border is the limit: exactly 9990 (no margin)
             outcome = free.MoveEdge({ 0 }, Side::Right, 9990, 260, 104, Only({ 0 }));
             AssertMoved(outcome);
-            Assert::IsTrue(outcome.clamped);
-            Assert::AreEqual(9740, outcome.position);
-            Assert::AreEqual(9740, free.Current().at(0).right);
+            Assert::IsFalse(outcome.clamped);
+            Assert::AreEqual(9990, outcome.position);
+            Assert::AreEqual(9990, free.Current().at(0).right);
             AssertAtBase(free, 3);
 
             // and back (contract, no occupied neighbour): exactly where requested
@@ -671,6 +671,63 @@ namespace FancyZonesUnitTests
             AssertMoved(outcome);
             Assert::AreEqual(6000, free.Current().at(0).right);
             AssertAtBase(free, 1);
+        }
+
+        TEST_METHOD (SingleWindowReachesTheBorderOnEverySide)
+        {
+            // Four columns, one window: the border is the limit; 10000 and 10500 both give exactly TotalUnits
+            const auto four = OneRow({ 2500, 2500, 2500, 2500 });
+            for (const int requested : { 10000, 10500 })
+            {
+                ZoneRectModel model(four);
+                const auto outcome = model.MoveEdge({ 0 }, Side::Right, requested, 260, 104, Only({ 0 }));
+                AssertMoved(outcome);
+                Assert::AreEqual(10000, outcome.position);
+                Assert::AreEqual(10000, model.Current().at(0).right);
+                Assert::AreEqual(requested > 10000, outcome.clamped);
+            }
+
+            // Left of the last column toward 0 (0 and -500)
+            for (const int requested : { 0, -500 })
+            {
+                ZoneRectModel model(four);
+                const auto outcome = model.MoveEdge({ 3 }, Side::Left, requested, 260, 104, Only({ 3 }));
+                AssertMoved(outcome);
+                Assert::AreEqual(0, outcome.position);
+                Assert::AreEqual(0, model.Current().at(3).left);
+                Assert::AreEqual(requested < 0, outcome.clamped);
+            }
+
+            // two rows: Bottom of the top zone to 10500 -> 10000; Top of the bottom zone to -500 -> 0
+            const auto rows = RectsFromGrid(MakeGrid({ 5000, 5000 }, { 10000 }, { { 0 }, { 1 } }));
+            ZoneRectModel down(rows);
+            auto outcome = down.MoveEdge({ 0 }, Side::Bottom, 10500, 260, 104, Only({ 0 }));
+            AssertMoved(outcome);
+            Assert::AreEqual(10000, down.Current().at(0).bottom);
+            ZoneRectModel up(rows);
+            outcome = up.MoveEdge({ 1 }, Side::Top, -500, 260, 104, Only({ 1 }));
+            AssertMoved(outcome);
+            Assert::AreEqual(0, up.Current().at(1).top);
+
+            // the dragged zone itself still keeps its minimum from its opposite edge (contract side)
+            ZoneRectModel shrink(four);
+            outcome = shrink.MoveEdge({ 0 }, Side::Right, 10, 260, 104, Only({ 0 }));
+            Assert::AreEqual(260, shrink.Current().at(0).right);
+        }
+
+        TEST_METHOD (PushedNeighbourAtTheBorderKeepsItsMinimum)
+        {
+            // zones 0 and 3 occupied: the border request stops at zone 3's bound, 10000 - 260 = 9740
+            const auto four = OneRow({ 2500, 2500, 2500, 2500 });
+            for (const int requested : { 10000, 10500 })
+            {
+                ZoneRectModel model(four);
+                const auto outcome = model.MoveEdge({ 0 }, Side::Right, requested, 260, 104, Only({ 0, 3 }));
+                Assert::IsTrue(outcome.clamped);
+                Assert::AreEqual(9740, model.Current().at(0).right);
+                Assert::AreEqual(9740, model.Current().at(3).left);
+                Assert::AreEqual(10000, model.Current().at(3).right);
+            }
         }
 
         TEST_METHOD (ExpandPushesOnlyOccupiedZones)
