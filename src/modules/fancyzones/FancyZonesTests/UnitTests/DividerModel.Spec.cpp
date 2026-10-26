@@ -180,6 +180,73 @@ namespace FancyZonesUnitTests
             Assert::AreEqual(1000, model.Current().columnsPercents()[1]);
         }
 
+        TEST_METHOD (SmallBaseTrackCanReturnToItsBaseSize)
+        {
+            // base track 0 (500) is below the minimum track (1000); after growing it must be able to shrink back to 500
+            DividerModel model(MakeGrid({ 10000 }, { 500, 9500 }, { { 0, 1 } }));
+
+            Assert::IsTrue(model.Move({ Axis::Column, 1 }, 600, 1000, 0));
+            Assert::AreEqual(600, model.Current().columnsPercents()[0]);
+            Assert::AreEqual(9400, model.Current().columnsPercents()[1]);
+            Assert::IsTrue(model.IsModified());
+
+            Assert::IsTrue(model.Move({ Axis::Column, 1 }, 500, 1000, 0));
+            Assert::AreEqual(500, model.Current().columnsPercents()[0]);
+            Assert::AreEqual(9500, model.Current().columnsPercents()[1]);
+            Assert::IsFalse(model.IsModified());
+
+            // still never below its base size
+            Assert::IsFalse(model.Move({ Axis::Column, 1 }, 300, 1000, 0));
+            Assert::AreEqual(500, model.Current().columnsPercents()[0]);
+        }
+
+        TEST_METHOD (DividerBetweenTwoSmallBaseTracksStaysAtBase)
+        {
+            // both tracks at their (small) base size: per-side minimums are min(1000, 500, 500) = 500,
+            // so low = 0 + 500 = 500 and high = 1000 - 500 = 500; moving to 700 is clamped back to 500
+            DividerModel model(MakeGrid({ 10000 }, { 500, 500, 9000 }, { { 0, 1, 2 } }));
+            Assert::IsFalse(model.Move({ Axis::Column, 1 }, 700, 1000, 0));
+            Assert::AreEqual(500, model.Current().columnsPercents()[0]);
+            Assert::AreEqual(500, model.Current().columnsPercents()[1]);
+            Assert::AreEqual(9000, model.Current().columnsPercents()[2]);
+
+            Assert::IsFalse(model.Move({ Axis::Column, 1 }, 500, 1000, 0));
+            Assert::IsFalse(model.IsModified());
+        }
+
+        TEST_METHOD (DividerBetweenTwoSmallTracksIsNotFrozen)
+        {
+            DividerModel model(MakeGrid({ 10000 }, { 500, 500, 9000 }, { { 0, 1, 2 } }));
+
+            // grow track 1 to 800 via divider 2: lowMin = min(1000, 500, 500) = 500, highMin = 1000 -> [500, 800, 8700]
+            Assert::IsTrue(model.Move({ Axis::Column, 2 }, 1300, 1000, 0));
+            Assert::AreEqual(500, model.Current().columnsPercents()[0]);
+            Assert::AreEqual(800, model.Current().columnsPercents()[1]);
+            Assert::AreEqual(8700, model.Current().columnsPercents()[2]);
+
+            // divider 1: lowMin = min(1000, 500, 500) = 500, highMin = min(1000, 800, 500) = 500
+            // low = 500, high = 1300 - 500 = 800 (the old rule gave high = 1300 - 800 = 500: frozen)
+            Assert::IsTrue(model.Move({ Axis::Column, 1 }, 700, 1000, 0));
+            Assert::AreEqual(700, model.Current().columnsPercents()[0]);
+            Assert::AreEqual(600, model.Current().columnsPercents()[1]);
+            Assert::AreEqual(8700, model.Current().columnsPercents()[2]);
+
+            // beyond high: clamped at 800 -> [800, 500, 8700]
+            Assert::IsTrue(model.Move({ Axis::Column, 1 }, 900, 1000, 0));
+            Assert::AreEqual(800, model.Current().columnsPercents()[0]);
+            Assert::AreEqual(500, model.Current().columnsPercents()[1]);
+
+            // back to base: divider 1 to 500 -> [500, 800, 8700], divider 2 to 1000 -> [500, 500, 9000]
+            Assert::IsTrue(model.Move({ Axis::Column, 1 }, 500, 1000, 0));
+            Assert::AreEqual(500, model.Current().columnsPercents()[0]);
+            Assert::AreEqual(800, model.Current().columnsPercents()[1]);
+            Assert::IsTrue(model.Move({ Axis::Column, 2 }, 1000, 1000, 0));
+            Assert::AreEqual(500, model.Current().columnsPercents()[0]);
+            Assert::AreEqual(500, model.Current().columnsPercents()[1]);
+            Assert::AreEqual(9000, model.Current().columnsPercents()[2]);
+            Assert::IsFalse(model.IsModified());
+        }
+
         TEST_METHOD (MoveAllowedWhenBothTracksAreBelowTwiceTheMinimum)
         {
             // tracks 500 + 1400 < 2 * 1000: low (previous + min) used to exceed high (next - min) and block the move

@@ -151,13 +151,15 @@ namespace FancyZonesDividers
         }
 
         // Per-side effective minimum: a track that is already smaller than minTrack may grow but never
-        // shrinks further, and it does not force the divider to jump. With these minimums low <= high always
-        // holds (the current position lies between them).
+        // shrinks below the smaller of its current and its base size, and it does not force the divider to
+        // jump. Capping by the base size lets a small base track that was grown return to its base size.
+        // With these minimums low <= high always holds (the current position lies between them).
+        const auto& baseTracks = Tracks(m_base, divider.axis);
         const size_t nextTrack = static_cast<size_t>(divider.index);
         const size_t prevTrack = nextTrack - 1;
         const int effectiveMin = (std::max)(minTrack, 0);
-        const int lowMin = (std::min)(effectiveMin, tracks[prevTrack]);
-        const int highMin = (std::min)(effectiveMin, tracks[nextTrack]);
+        const int lowMin = (std::min)({ effectiveMin, tracks[prevTrack], baseTracks[prevTrack] });
+        const int highMin = (std::min)({ effectiveMin, tracks[nextTrack], baseTracks[nextTrack] });
         const int low = previous + lowMin;
         const int high = next - highMin;
         if (low > high)
