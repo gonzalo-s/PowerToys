@@ -3,6 +3,7 @@
 
 #include <dwmapi.h>
 
+#include <FancyZonesLib/FancyZonesWindowProcessing.h>
 #include <FancyZonesLib/WindowUtils.h>
 #include <FancyZonesLib/WorkArea.h>
 #include <FancyZonesLib/WorkAreaConfiguration.h>
@@ -21,7 +22,27 @@ bool WindowResizeHandler::ReadFrame(HWND window, RECT& frame) noexcept
 
 WorkArea* WindowResizeHandler::FindWorkArea() const
 {
-    return m_window ? m_workAreas.GetWorkAreaFromWindow(m_window) : nullptr;
+    if (!m_window)
+    {
+        return nullptr;
+    }
+
+    // Bound to the work area the drag started on, even if the window is dragged (mostly) onto another monitor.
+    for (const auto& [monitor, workArea] : m_workAreas.GetAllWorkAreas())
+    {
+        if (workArea && workArea->UniqueId() == m_workAreaId)
+        {
+            return workArea.get();
+        }
+    }
+
+    return nullptr;
+}
+
+WorkArea* WindowResizeHandler::FindWorkAreaWithSameLayout() const
+{
+    auto* workArea = FindWorkArea();
+    return workArea && workArea->GetLayoutId() == m_layoutId ? workArea : nullptr;
 }
 
 void WindowResizeHandler::Reset() noexcept
@@ -33,14 +54,21 @@ void WindowResizeHandler::Reset() noexcept
     m_moved = {};
     m_lastUpdateTick = 0;
     m_cueAtBase = true;
-    m_applying = false;
+    m_workAreaId = {};
+    m_layoutId = GUID_NULL;
 }
 
 bool WindowResizeHandler::Begin(HWND window)
 {
+    if (m_window)
+    {
+        // A previous drag never ended: clean it up (cue, unmodified working entry) before starting a new one.
+        Abort();
+    }
+
     Reset();
 
-    if (!window || (GetWindowLong(window, GWL_STYLE) & WS_SIZEBOX) == 0)
+    if (!window || (GetWindowLong(window, GWL_STYLE) & WS_SIZEBOX) == 0 || !FancyZonesWindowProcessing::IsProcessableManually(window))
     {
         return false;
     }
@@ -67,13 +95,15 @@ bool WindowResizeHandler::Begin(HWND window)
     m_zones = std::move(zones);
     m_startFrame = frame;
     m_lastFrame = frame;
+    m_workAreaId = workArea->UniqueId();
+    m_layoutId = workArea->GetLayoutId();
     workArea->ShowResizeCue(window, true);
     return true;
 }
 
 void WindowResizeHandler::Update()
 {
-    if (!m_window || m_applying)
+    if (!m_window)
     {
         return;
     }
@@ -97,14 +127,13 @@ void WindowResizeHandler::Update()
         return;
     }
 
-    auto* workArea = FindWorkArea();
+    auto* workArea = FindWorkAreaWithSameLayout();
     if (!workArea)
     {
+        // Work area gone or layout changed mid-drag (stale zone indices): stop tracking.
         Abort();
         return;
     }
-
-    m_applying = true;
 
     // Edges stay "moved" once they moved, so dragging an edge back to where it started still updates the divider.
     m_moved |= FancyZonesDividers::DetectMovedEdges(m_startFrame, frame, MovedEdgeTolerancePx);
@@ -118,8 +147,6 @@ void WindowResizeHandler::Update()
         m_cueAtBase = result.atBase;
         workArea->ShowResizeCue(m_window, m_cueAtBase);
     }
-
-    m_applying = false;
 }
 
 void WindowResizeHandler::End()
@@ -129,17 +156,21 @@ void WindowResizeHandler::End()
         return;
     }
 
-    if (auto* workArea = FindWorkArea())
+    auto* workArea = FindWorkAreaWithSameLayout();
+    if (!workArea)
     {
-        RECT frame{};
-        if (ReadFrame(m_window, frame))
-        {
-            m_moved |= FancyZonesDividers::DetectMovedEdges(m_startFrame, frame, MovedEdgeTolerancePx);
-            workArea->FinishEdgeResize(m_zones, frame, m_moved);
-        }
-
-        workArea->HideZones();
+        Abort();
+        return;
     }
+
+    RECT frame{};
+    if (ReadFrame(m_window, frame))
+    {
+        m_moved |= FancyZonesDividers::DetectMovedEdges(m_startFrame, frame, MovedEdgeTolerancePx);
+        workArea->FinishEdgeResize(m_zones, frame, m_moved);
+    }
+
+    workArea->HideZones();
 
     Reset();
 }

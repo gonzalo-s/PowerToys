@@ -1,13 +1,18 @@
 #pragma once
 
+#include <guiddef.h>
+
 #include <FancyZonesLib/DividerModel.h>
+#include <FancyZonesLib/FancyZonesDataTypes.h>
 #include <FancyZonesLib/Zone.h>
 
 class WorkAreaConfiguration;
 class WorkArea;
 
 // Tracks one user resize (resize cursor drag) of a snapped window and turns it into grid divider moves.
-// Work areas are looked up on every call because they can be recreated while a drag is in flight.
+// The handler is bound to the work area (WorkAreaId) and layout the drag started on. The work area object is looked
+// up by that id on every call because it can be recreated while a drag is in flight; if it is gone or its layout
+// changed, the drag is aborted.
 class WindowResizeHandler
 {
 public:
@@ -26,7 +31,9 @@ public:
     // MOVESIZEEND. Final pass using the window's actual frame.
     void End();
 
-    // Stop tracking without applying anything (window destroyed, work areas recreated).
+    // Stop tracking (window destroyed, drag cancelled, work area gone or layout changed). Hides the cue and, if the
+    // working layout of the bound work area is unmodified, discards it and re-places the snapped windows. A layout
+    // already modified by live updates is kept.
     void Abort();
 
     bool IsTracking(HWND window) const noexcept { return m_window != nullptr && m_window == window; }
@@ -34,6 +41,7 @@ public:
 private:
     static bool ReadFrame(HWND window, RECT& frame) noexcept;
     WorkArea* FindWorkArea() const;
+    WorkArea* FindWorkAreaWithSameLayout() const; // nullptr when the bound work area is gone or its layout changed
     void Reset() noexcept;
 
     const WorkAreaConfiguration& m_workAreas;
@@ -44,5 +52,6 @@ private:
     FancyZonesDividers::MovedEdges m_moved;
     ULONGLONG m_lastUpdateTick{};
     bool m_cueAtBase = true;
-    bool m_applying = false;
+    FancyZonesDataTypes::WorkAreaId m_workAreaId{}; // work area the drag started on
+    GUID m_layoutId{}; // layout applied on that work area when the drag started
 };

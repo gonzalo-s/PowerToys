@@ -111,8 +111,42 @@ namespace FancyZonesUnitTests
 
         TEST_METHOD (InitFromGridRejectsEmptyWorkArea)
         {
-            const auto grid = LayoutConfigurator::GridInfo(m_data, FancyZonesUtils::Rect(RECT{ 0, 0, 1920, 1080 })).value();
+            const FancyZonesUtils::Rect workArea(RECT{ 0, 0, 1920, 1080 });
+            const auto grid = LayoutConfigurator::GridInfo(m_data, workArea).value();
+            Assert::IsTrue(m_layout->InitFromGrid(workArea, grid));
+            const RECT before = m_layout->Zones().at(0).GetZoneRect();
+
             Assert::IsFalse(m_layout->InitFromGrid(FancyZonesUtils::Rect(RECT{ 0, 0, 0, 0 }), grid));
+            Assert::AreEqual(size_t{ 4 }, m_layout->Zones().size());
+            Assert::AreEqual(before.right, m_layout->Zones().at(0).GetZoneRect().right);
+        }
+
+        TEST_METHOD (InitFromGridRejectsDifferentZoneCount)
+        {
+            const FancyZonesUtils::Rect workArea(RECT{ 0, 0, 1920, 1080 });
+            Assert::IsTrue(m_layout->InitFromGrid(workArea, LayoutConfigurator::GridInfo(m_data, workArea).value()));
+            const RECT before = m_layout->Zones().at(0).GetZoneRect();
+
+            // three columns: 3 zones, the layout expects m_data.zoneCount = 4
+            const GridLayoutInfo threeZones(GridLayoutInfo::Full{
+                .rows = 1,
+                .columns = 3,
+                .rowsPercents = { 10000 },
+                .columnsPercents = { 3333, 3333, 3334 },
+                .cellChildMap = { { 0, 1, 2 } } });
+            Assert::IsFalse(m_layout->InitFromGrid(workArea, threeZones));
+            Assert::AreEqual(size_t{ 4 }, m_layout->Zones().size());
+            Assert::AreEqual(before.right, m_layout->Zones().at(0).GetZoneRect().right);
+            Assert::AreEqual(before.bottom, m_layout->Zones().at(0).GetZoneRect().bottom);
+        }
+
+        TEST_METHOD (SpacingIsZeroWhenHidden)
+        {
+            LayoutData data = m_data;
+            data.showSpacing = false;
+            Layout layout(data);
+            Assert::AreEqual(0, layout.Spacing());
+            Assert::AreEqual(17, m_layout->Spacing());
         }
 
         TEST_METHOD (EmptyZones)

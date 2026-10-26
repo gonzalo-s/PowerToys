@@ -10,6 +10,7 @@
 
 // In-memory, per work area (monitor + virtual desktop) store of modified grid layouts.
 // Entries are never written to disk. They outlive WorkArea objects, which are recreated on display changes.
+// Used only from the FancyZones main (message-loop) thread; not thread-safe.
 class WorkingLayouts
 {
 public:

@@ -611,9 +611,11 @@ namespace FancyZonesUnitTests
         TEST_METHOD (DiscardRemovesUnmodifiedWorkingLayout)
         {
             m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 960, 540 }, Right(), nullptr);
-            m_workArea->DiscardUnmodifiedWorkingLayout();
-
             const auto base = LayoutConfigurator::GridInfo(AppliedLayouts::instance().GetDeviceLayout(m_workAreaId).value(), m_workAreaRect).value();
+            // precondition: the resize created an (unmodified) working entry
+            Assert::IsNotNull(WorkingLayouts::instance().Find(m_workAreaId, m_workArea->GetLayoutId(), base));
+
+            m_workArea->DiscardUnmodifiedWorkingLayout();
             Assert::IsNull(WorkingLayouts::instance().Find(m_workAreaId, m_workArea->GetLayoutId(), base));
         }
 
