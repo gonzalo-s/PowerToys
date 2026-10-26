@@ -108,7 +108,16 @@ namespace
 namespace
 {
     constexpr long MinSizePx = 50; // no zone may become narrower/shorter than this while resizing (capped per zone by its current and base size)
-    constexpr long SnapRadiusPx = 8; // distance from its base position at which a dragged side snaps back to it
+    constexpr long SnapRadiusPx = 20; // distance from its base position at which a dragged side snaps back to it (magnet)
+
+    // Ceiling of numerator / denominator for denominator > 0 (C++ division truncates toward zero, which already is the
+    // ceiling for negative quotients). Converting a pixel edge with it makes floor(units * total / TotalUnits) return
+    // the same pixel again (total < TotalUnits), so a released edge does not move by 1 px.
+    constexpr long long CeilDiv(long long numerator, long long denominator) noexcept
+    {
+        const long long quotient = numerator / denominator;
+        return (numerator % denominator != 0 && numerator > 0) ? quotient + 1 : quotient;
+    }
 }
 
 WorkArea::WorkArea(HINSTANCE hinstance, const FancyZonesDataTypes::WorkAreaId& uniqueId, const FancyZonesUtils::Rect& workAreaRect) :
@@ -154,7 +163,8 @@ bool WorkArea::Snap(HWND window, const ZoneIndexSet& zones, bool updatePosition)
 
     if (updatePosition)
     {
-        const auto rect = m_layout->GetCombinedZonesRect(zones);
+        // The working zones when the layout was resized (the layout's own zones otherwise).
+        const auto rect = Layout::CombinedRect(ActiveZones(), zones);
         const auto adjustedRect = FancyZonesWindowUtils::AdjustRectForSizeWindowToRect(window, rect, m_window);
         FancyZonesWindowUtils::SaveWindowSizeAndOrigin(window);
         FancyZonesWindowUtils::SizeWindowToRect(window, adjustedRect);
@@ -339,7 +349,7 @@ void WorkArea::RepositionSnappedWindows(HWND skipWindow, const ZonesMap* previou
         return;
     }
 
-    const auto& layoutZones = m_layout->Zones();
+    const auto& layoutZones = ActiveZones();
     const auto snappedWindows = m_layoutWindows.SnappedWindows();
     for (const auto& [window, zones] : snappedWindows)
     {
@@ -370,13 +380,13 @@ void WorkArea::RepositionWindow(HWND window, const ZoneIndexSet& zones)
         return;
     }
 
-    const auto& layoutZones = m_layout->Zones();
+    const auto& layoutZones = ActiveZones();
     if (zones.empty() || std::any_of(zones.begin(), zones.end(), [&layoutZones](ZoneIndex id) { return !layoutZones.contains(id); }))
     {
         return;
     }
 
-    const auto rect = m_layout->GetCombinedZonesRect(zones);
+    const auto rect = Layout::CombinedRect(layoutZones, zones);
     const auto adjusted = FancyZonesWindowUtils::AdjustRectForSizeWindowToRect(window, rect, m_window);
 
     RECT current{};
@@ -481,7 +491,8 @@ EdgeResizeResult WorkArea::ApplyEdgeResizeInternal(const ZoneIndexSet& zones, co
             continue;
         }
 
-        const int position = static_cast<int>(static_cast<long long>(dragged.edge) * TotalUnits / dragged.length);
+        // Ceiling: the rebuilt zone edge lands exactly on the dragged pixel edge.
+        const int position = static_cast<int>(CeilDiv(static_cast<long long>(dragged.edge) * TotalUnits, dragged.length));
         const int minSize = static_cast<int>(static_cast<long long>(MinSizePx) * TotalUnits / dragged.length);
         const int snapRadius = static_cast<int>(static_cast<long long>(SnapRadiusPx) * TotalUnits / dragged.length);
         if (model.MoveEdge(zones, dragged.side, position, minSize, snapRadius) == MoveResult::Moved)
@@ -497,14 +508,19 @@ EdgeResizeResult WorkArea::ApplyEdgeResizeInternal(const ZoneIndexSet& zones, co
 
     if (result.changed)
     {
-        const ZonesMap previousZones = m_layout->Zones();
-        if (!m_layout->InitFromRects(m_workAreaRect, model.Current()))
+        // Only the working zones (window positions) change; the layout keeps its original zones.
+        const ZonesMap previousZones = ActiveZones();
+        auto working = Layout::ZonesFromRects(m_workAreaRect, model.Current(), m_layout->Spacing(), m_layout->Zones().size());
+        if (working)
+        {
+            m_workingZones = std::move(*working);
+        }
+        else
         {
             // Should not happen (the model keeps every zone at least as large as its minimum); fall back to the
             // base layout.
             Logger::error(L"Working layout produced invalid zones, resetting to the base layout");
-            WorkingLayouts::instance().Remove(m_uniqueId);
-            CalculateZoneSet();
+            RemoveWorkingLayout();
             result.atBase = true;
         }
 
@@ -526,23 +542,31 @@ void WorkArea::FinishEdgeResize(const ZoneIndexSet& zones, const RECT& finalFram
 
     // Single pass: update the model without moving windows, drop an unmodified entry, then move only the windows
     // whose zones changed during this pass.
-    const ZonesMap previousZones = m_layout->Zones();
+    const ZonesMap previousZones = ActiveZones();
     const auto result = ApplyEdgeResizeInternal(zones, finalFrame, moved, nullptr, false);
-    if (!result.dividerDragged)
+    if (!result.dividerDragged || !m_baseRects)
     {
         // Natural FancyZones resize (outer edges or no divider): the window stays where the user left it and
         // nothing else moves.
         return;
     }
 
-    if (m_baseRects)
+    // The moved sides that lie on a divider (whether a side is on the work-area border is the same in the base and
+    // the working rectangles: walls never reach the border).
+    FancyZonesZoneRects::MovedEdges dividerSides;
     {
-        const auto* model = WorkingLayouts::instance().Find(m_uniqueId, m_layout->Id(), *m_baseRects);
-        if (model && !model->IsModified())
-        {
-            WorkingLayouts::instance().Remove(m_uniqueId);
-            CalculateZoneSet();
-        }
+        using FancyZonesZoneRects::Side;
+        const FancyZonesZoneRects::ZoneRectModel probe(*m_baseRects);
+        dividerSides.left = moved.left && probe.HasNeighbour(zones, Side::Left);
+        dividerSides.top = moved.top && probe.HasNeighbour(zones, Side::Top);
+        dividerSides.right = moved.right && probe.HasNeighbour(zones, Side::Right);
+        dividerSides.bottom = moved.bottom && probe.HasNeighbour(zones, Side::Bottom);
+    }
+
+    const auto* model = WorkingLayouts::instance().Find(m_uniqueId, m_layout->Id(), *m_baseRects);
+    if (model && !model->IsModified())
+    {
+        RemoveWorkingLayout();
     }
 
     if (result.outerEdgeMoved)
@@ -552,14 +576,34 @@ void WorkArea::FinishEdgeResize(const ZoneIndexSet& zones, const RECT& finalFram
         return;
     }
 
-    // Only inner edges moved: place the dragged window exactly into its zones (its zone rect may be unchanged
-    // since the last live update, so it is placed explicitly), then the other windows whose zones changed.
+    // Only inner edges moved. The dragged window is placed into its zones only when a dragged edge ends up more than
+    // 1 px away from where the user released it (it snapped to the original line or was clamped to the minimum
+    // size); otherwise the release position is kept as it is.
     if (draggedWindow)
     {
-        RepositionWindow(draggedWindow, m_layoutWindows.GetZoneIndexSetFromWindow(draggedWindow));
+        const auto windowZones = m_layoutWindows.GetZoneIndexSetFromWindow(draggedWindow);
+        if (!windowZones.empty())
+        {
+            RECT zoneRect = Layout::CombinedRect(ActiveZones(), windowZones);
+            OffsetRect(&zoneRect, m_workAreaRect.left(), m_workAreaRect.top());
+            if (ReleasedEdgeNeedsPlacement(zoneRect, finalFrame, dividerSides))
+            {
+                RepositionWindow(draggedWindow, windowZones);
+            }
+        }
     }
 
     RepositionSnappedWindows(draggedWindow, &previousZones);
+}
+
+bool WorkArea::ReleasedEdgeNeedsPlacement(const RECT& zoneRect, const RECT& frame, const FancyZonesZoneRects::MovedEdges& sides) noexcept
+{
+    constexpr long tolerancePx = 1;
+    const auto differs = [](long a, long b) noexcept { return (a > b ? a - b : b - a) > tolerancePx; };
+    return (sides.left && differs(zoneRect.left, frame.left)) ||
+           (sides.top && differs(zoneRect.top, frame.top)) ||
+           (sides.right && differs(zoneRect.right, frame.right)) ||
+           (sides.bottom && differs(zoneRect.bottom, frame.bottom));
 }
 
 void WorkArea::DiscardUnmodifiedWorkingLayout()
@@ -569,12 +613,45 @@ void WorkArea::DiscardUnmodifiedWorkingLayout()
         const auto* model = WorkingLayouts::instance().Find(m_uniqueId, m_layout->Id(), *m_baseRects);
         if (model && !model->IsModified())
         {
-            const ZonesMap previousZones = m_layout->Zones();
-            WorkingLayouts::instance().Remove(m_uniqueId);
-            CalculateZoneSet();
+            const ZonesMap previousZones = ActiveZones();
+            RemoveWorkingLayout();
             RepositionSnappedWindows(nullptr, &previousZones);
         }
     }
+}
+
+void WorkArea::ResetWorkingLayout(HWND skipWindow)
+{
+    if (!m_layout)
+    {
+        return;
+    }
+
+    const bool hasEntry = m_baseRects && WorkingLayouts::instance().Find(m_uniqueId, m_layout->Id(), *m_baseRects) != nullptr;
+    if (!hasEntry && m_workingZones.empty())
+    {
+        return;
+    }
+
+    const ZonesMap previousZones = ActiveZones();
+    RemoveWorkingLayout();
+    RepositionSnappedWindows(skipWindow, &previousZones);
+}
+
+const ZonesMap& WorkArea::ActiveZones() const noexcept
+{
+    if (!m_workingZones.empty())
+    {
+        return m_workingZones;
+    }
+
+    return m_layout ? m_layout->Zones() : m_baseZones;
+}
+
+void WorkArea::RemoveWorkingLayout()
+{
+    WorkingLayouts::instance().Remove(m_uniqueId);
+    m_workingZones.clear();
 }
 
 void WorkArea::ShowResizeCue(HWND draggedWindow, bool atBase)
@@ -673,6 +750,7 @@ void WorkArea::InitSnappedWindows()
 
 void WorkArea::CalculateZoneSet()
 {
+    m_workingZones.clear();
     auto appliedLayout = AppliedLayouts::instance().GetDeviceLayout(m_uniqueId);
     if (!appliedLayout.has_value())
     {
@@ -706,13 +784,22 @@ void WorkArea::CalculateZoneSet()
         m_baseRects = FancyZonesZoneRects::RectsFromGrid(*grid);
     }
 
-    // A working (resized) layout for this work area overrides the template zones.
+    // A working (resized) layout for this work area positions the windows; the layout keeps the template zones.
     if (m_baseRects)
     {
         const auto* working = WorkingLayouts::instance().Find(m_uniqueId, m_layout->Id(), *m_baseRects);
         if (working)
         {
-            m_layout->InitFromRects(m_workAreaRect, working->Current());
+            auto zones = Layout::ZonesFromRects(m_workAreaRect, working->Current(), m_layout->Spacing(), m_layout->Zones().size());
+            if (zones)
+            {
+                m_workingZones = std::move(*zones);
+            }
+            else
+            {
+                Logger::error(L"Working layout does not fit the work area, dropping it");
+                WorkingLayouts::instance().Remove(m_uniqueId);
+            }
         }
     }
 }

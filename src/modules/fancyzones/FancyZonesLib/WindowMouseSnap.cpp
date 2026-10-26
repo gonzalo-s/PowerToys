@@ -126,7 +126,14 @@ void WindowMouseSnap::MoveSizeEnd()
         }
         else if (m_currentWorkArea)
         {
-            m_currentWorkArea->Snap(m_window, m_highlightedZones.Zones());
+            const auto& zones = m_highlightedZones.Zones();
+            if (!zones.empty())
+            {
+                // User-initiated snap: back to the original layout (the dragged window is placed by Snap)
+                m_currentWorkArea->ResetWorkingLayout(m_window);
+            }
+
+            m_currentWorkArea->Snap(m_window, zones);
         }
     }
     else

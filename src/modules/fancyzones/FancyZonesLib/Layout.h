@@ -13,10 +13,6 @@ public:
     ~Layout() = default;
 
     bool Init(const FancyZonesUtils::Rect& workAreaRect, HMONITOR monitor) noexcept;
-    // Rebuilds the zones from zone rectangles in units of 1/10000 of the work area (used for working layouts), keeping
-    // this layout's spacing. Returns false and leaves the zones untouched on an empty work area, a zone-count mismatch
-    // or an invalid zone.
-    bool InitFromRects(const FancyZonesUtils::Rect& workAreaRect, const FancyZonesZoneRects::UnitRects& rects) noexcept;
     // Zones of the given zone rectangles (units of 1/10000 of the work area) with the grid pixel maths of
     // LayoutConfigurator (floor, spacing inset of spacing/2 between zones and spacing at the work-area border).
     // nullopt on an empty work area, a zone-count mismatch or an invalid zone.

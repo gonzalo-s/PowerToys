@@ -61,14 +61,28 @@ public:
 
     // Dynamic grid resize. Frames are visible window frames in screen coordinates. An inner edge moves only the zone
     // wall segment it touches (the zones on both sides of it). Edges on the work-area border keep the natural
-    // FancyZones behaviour: no entry, no other window moves.
+    // FancyZones behaviour: no entry, no other window moves. The resize changes only the working zones (window
+    // positions), never the layout's own zones.
     // FinishEdgeResize repositions only windows whose zones changed; the dragged window is placed into its zones
-    // only when every moved edge was an inner edge, and nothing is repositioned when no inner edge was dragged.
+    // only when every moved edge was an inner edge and a dragged edge differs from the release position by more
+    // than 1 px (snap or clamp); nothing is repositioned when no inner edge was dragged.
     bool SupportsEdgeResize() const noexcept { return m_baseRects.has_value(); }
     EdgeResizeResult ApplyEdgeResize(const ZoneIndexSet& zones, const RECT& currentFrame, const FancyZonesZoneRects::MovedEdges& moved, HWND skipWindow);
     void FinishEdgeResize(const ZoneIndexSet& zones, const RECT& finalFrame, const FancyZonesZoneRects::MovedEdges& moved, HWND draggedWindow = nullptr);
     void DiscardUnmodifiedWorkingLayout();
     void ShowResizeCue(HWND draggedWindow, bool atBase);
+
+    // Zones that position the snapped windows: the working (resized) zones when a working layout exists, otherwise
+    // the layout's zones. GetLayout() always keeps the original layout (overlay, drop targets, keyboard snapping).
+    const ZonesMap& GetActiveZones() const noexcept { return ActiveZones(); }
+
+    // User-initiated snap: drops the working layout of this work area and moves every snapped window (except
+    // skipWindow, which the caller is about to place) whose position differs back to its original zone rect.
+    void ResetWorkingLayout(HWND skipWindow = nullptr);
+
+    // Release rule of an edge resize: true when a side listed in sides differs by more than 1 px between the zone
+    // rect and the released frame (the edge snapped or was clamped). Both rects in the same coordinate space.
+    static bool ReleasedEdgeNeedsPlacement(const RECT& zoneRect, const RECT& frame, const FancyZonesZoneRects::MovedEdges& sides) noexcept;
 
     // Moves snapped windows (except skipWindow) into their zones with a single async SetWindowPos each.
     // With previousZones, only windows whose combined zone rect differs from previousZones are moved.
@@ -95,6 +109,8 @@ protected:
 private:
     bool InitWindow(HINSTANCE hinstance);
     void RepositionWindow(HWND window, const ZoneIndexSet& zones);
+    const ZonesMap& ActiveZones() const noexcept;
+    void RemoveWorkingLayout();
     EdgeResizeResult ApplyEdgeResizeInternal(const ZoneIndexSet& zones, const RECT& currentFrame, const FancyZonesZoneRects::MovedEdges& moved, HWND skipWindow, bool reposition);
     void InitLayout(const FancyZonesDataTypes::WorkAreaId& parentUniqueId);
     
@@ -106,9 +122,10 @@ private:
     const FancyZonesUtils::Rect m_workAreaRect{};
     const FancyZonesDataTypes::WorkAreaId m_uniqueId;
     HWND m_window{}; // Hidden tool window used to represent current monitor desktop work area.
-    std::unique_ptr<Layout> m_layout;
+    std::unique_ptr<Layout> m_layout; // always the applied (original) layout
     std::optional<FancyZonesZoneRects::UnitRects> m_baseRects; // zone rectangles of the applied layout, set when it is grid-based
-    ZonesMap m_baseZones; // template zones of the applied layout, before any working-layout override (drawn by the resize cue)
+    ZonesMap m_baseZones; // template zones of the applied layout (drawn by the resize cue)
+    ZonesMap m_workingZones; // zones of the working (resized) layout that position the windows; empty = none
     LayoutAssignedWindows m_layoutWindows{};
     std::unique_ptr<ZonesOverlay> m_zonesOverlay;
 };

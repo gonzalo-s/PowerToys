@@ -184,23 +184,6 @@ namespace
     }
 }
 
-bool Layout::InitFromRects(const FancyZonesUtils::Rect& workArea, const FancyZonesZoneRects::UnitRects& rects) noexcept
-{
-    if (m_data.zoneCount < 0)
-    {
-        return false;
-    }
-
-    auto zones = ZonesFromRects(workArea, rects, Spacing(), static_cast<size_t>(m_data.zoneCount));
-    if (!zones)
-    {
-        return false;
-    }
-
-    m_zones = std::move(*zones);
-    return true;
-}
-
 std::optional<ZonesMap> Layout::ZonesFromRects(const FancyZonesUtils::Rect& workArea, const FancyZonesZoneRects::UnitRects& rects, int spacing, size_t expectedZoneCount) noexcept
 {
     using FancyZonesZoneRects::TotalUnits;

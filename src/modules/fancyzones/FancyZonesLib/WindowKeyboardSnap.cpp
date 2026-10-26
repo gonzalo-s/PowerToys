@@ -10,6 +10,17 @@
 #include <common/logger/logger.h>
 #include <common/utils/winapi_error.h>
 
+namespace
+{
+    // User-initiated snap: the working (resized) layout of the work area is reset first, so the window lands on its
+    // original zone rect and the other snapped windows return to theirs.
+    bool SnapToOriginalZones(WorkArea* workArea, HWND window, const ZoneIndexSet& zones)
+    {
+        workArea->ResetWorkingLayout(window);
+        return workArea->Snap(window, zones);
+    }
+}
+
 bool WindowKeyboardSnap::Snap(HWND window, HMONITOR monitor, DWORD vkCode, const std::unordered_map<HMONITOR, std::unique_ptr<WorkArea>>& activeWorkAreas, const std::vector<HMONITOR>& monitors)
 {
     return (vkCode == VK_LEFT || vkCode == VK_RIGHT) && SnapHotkeyBasedOnZoneNumber(window, vkCode, monitor, activeWorkAreas, monitors);
@@ -181,7 +192,7 @@ bool WindowKeyboardSnap::SnapBasedOnPositionOnAnotherMonitor(HWND window, RECT w
         bool snapped = false;
         if (workArea)
         {
-            snapped = workArea->Snap(window, { trueZoneIdx });
+            snapped = SnapToOriginalZones(workArea, window, { trueZoneIdx });
         }
 
         if (snapped)
@@ -236,7 +247,7 @@ bool WindowKeyboardSnap::SnapBasedOnPositionOnAnotherMonitor(HWND window, RECT w
         bool snapped = false;
         if (workArea)
         {
-            snapped = workArea->Snap(window, { trueZoneIdx });
+            snapped = SnapToOriginalZones(workArea, window, { trueZoneIdx });
         }
 
         if (snapped)
@@ -276,7 +287,7 @@ bool WindowKeyboardSnap::MoveByDirectionAndIndex(HWND window, DWORD vkCode, bool
     if (zoneIndexes.size() == 0)
     {
         const ZoneIndex zone = vkCode == VK_LEFT ? numZones - 1 : 0;
-        snapped = workArea->Snap(window, { zone });
+        snapped = SnapToOriginalZones(workArea, window, { zone });
     }
     else
     {
@@ -291,18 +302,18 @@ bool WindowKeyboardSnap::MoveByDirectionAndIndex(HWND window, DWORD vkCode, bool
             }
 
             const ZoneIndex zone = vkCode == VK_LEFT ? numZones - 1 : 0;
-            snapped = workArea->Snap(window, { zone });
+            snapped = SnapToOriginalZones(workArea, window, { zone });
         }
         else
         {
             // We didn't reach the edge
             if (vkCode == VK_LEFT)
             {
-                snapped = workArea->Snap(window, { oldId - 1 });
+                snapped = SnapToOriginalZones(workArea, window, { oldId - 1 });
             }
             else
             {
-                snapped = workArea->Snap(window, { oldId + 1 });
+                snapped = SnapToOriginalZones(workArea, window, { oldId + 1 });
             }
         }
     }
@@ -360,7 +371,7 @@ bool WindowKeyboardSnap::MoveByDirectionAndPosition(HWND window, RECT windowRect
     ZoneIndex result = FancyZonesUtils::ChooseNextZoneByPosition(vkCode, windowRect, zoneRects);
     if (static_cast<size_t>(result) < zoneRects.size())
     {
-        bool success = workArea->Snap(window, { freeZoneIndices[result] });
+        bool success = SnapToOriginalZones(workArea, window, { freeZoneIndices[result] });
         if (success)
         {
             Trace::FancyZones::KeyboardSnapWindowToZone(layout.get(), layoutWindows); 
@@ -378,7 +389,7 @@ bool WindowKeyboardSnap::MoveByDirectionAndPosition(HWND window, RECT windowRect
 
         if (static_cast<size_t>(result) < zoneRects.size())
         {
-            bool success = workArea->Snap(window, { result });
+            bool success = SnapToOriginalZones(workArea, window, { result });
 
             if (success)
             {
@@ -479,7 +490,7 @@ bool WindowKeyboardSnap::Extend(HWND window, RECT windowRect, DWORD vkCode, Work
         resultIndexSet = layout->GetCombinedZoneRange(m_extendData.windowInitialIndexSet, { targetZone });
     }
 
-    bool success = workArea->Snap(window, resultIndexSet);
+    bool success = SnapToOriginalZones(workArea, window, resultIndexSet);
     if (success)
     {
         Trace::FancyZones::KeyboardSnapWindowToZone(workArea->GetLayout().get(), workArea->GetLayoutWindows());

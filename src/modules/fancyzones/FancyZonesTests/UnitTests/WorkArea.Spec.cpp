@@ -557,14 +557,14 @@ namespace FancyZonesUnitTests
         TEST_METHOD (MovingRightEdgeMovesOnlyTopRow)
         {
             // zone 0 is the top-left zone, its visible frame is 0,0,960,540; drag the right edge to x = 1160
-            // position = 1160 * 10000 / 1920 = 6041 units -> 1920 * 6041 / 10000 = 1159 px
+            // position = ceil(1160 * 10000 / 1920) = ceil(6041.67) = 6042 units -> floor(1920 * 6042 / 10000) = 1160 px
             const auto result = m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 1160, 540 }, Right(), nullptr);
             Assert::IsTrue(result.changed);
             Assert::IsFalse(result.atBase);
 
-            const auto& zones = m_workArea->GetLayout()->Zones();
-            Assert::IsTrue(std::abs(zones.at(0).GetZoneRect().right - 1160L) <= 1);
-            Assert::IsTrue(std::abs(zones.at(1).GetZoneRect().left - 1160L) <= 1);
+            const auto& zones = m_workArea->GetActiveZones();
+            Assert::AreEqual(1160L, zones.at(0).GetZoneRect().right);
+            Assert::AreEqual(1160L, zones.at(1).GetZoneRect().left);
             // only the zones touching the dragged edge move: the bottom row keeps its wall at 960
             Assert::IsTrue(std::abs(zones.at(2).GetZoneRect().right - 960L) <= 1);
             Assert::IsTrue(std::abs(zones.at(3).GetZoneRect().left - 960L) <= 1);
@@ -577,14 +577,15 @@ namespace FancyZonesUnitTests
 
         TEST_METHOD (MovingBottomEdgeMovesOnlyLeftColumn)
         {
-            // drag zone 0's bottom edge from 540 to 740: 740 * 10000 / 1080 = 6851 units -> 1080 * 6851 / 10000 = 739 px
+            // drag zone 0's bottom edge from 540 to 740: ceil(740 * 10000 / 1080) = ceil(6851.85) = 6852 units
+            // -> floor(1080 * 6852 / 10000) = floor(740.02) = 740 px
             const auto result = m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 960, 740 }, Bottom(), nullptr);
             Assert::IsTrue(result.changed);
             Assert::IsFalse(result.atBase);
 
-            const auto& zones = m_workArea->GetLayout()->Zones();
-            Assert::IsTrue(std::abs(zones.at(0).GetZoneRect().bottom - 740L) <= 1);
-            Assert::IsTrue(std::abs(zones.at(2).GetZoneRect().top - 740L) <= 1);
+            const auto& zones = m_workArea->GetActiveZones();
+            Assert::AreEqual(740L, zones.at(0).GetZoneRect().bottom);
+            Assert::AreEqual(740L, zones.at(2).GetZoneRect().top);
             Assert::AreEqual(1080L, zones.at(2).GetZoneRect().bottom);
             // the right column keeps its wall at 540
             Assert::IsTrue(std::abs(zones.at(1).GetZoneRect().bottom - 540L) <= 1);
@@ -602,7 +603,7 @@ namespace FancyZonesUnitTests
             const auto result = m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 965, 540 }, Right(), nullptr);
             Assert::IsTrue(result.changed);
             Assert::IsTrue(result.atBase);
-            Assert::AreEqual(960L, m_workArea->GetLayout()->Zones().at(0).GetZoneRect().right);
+            Assert::AreEqual(960L, m_workArea->GetActiveZones().at(0).GetZoneRect().right);
         }
 
         TEST_METHOD (OuterEdgeDoesNothing)
@@ -611,7 +612,7 @@ namespace FancyZonesUnitTests
             Assert::IsFalse(result.changed);
             Assert::IsFalse(result.dividerDragged);
             Assert::IsTrue(result.outerEdgeMoved);
-            Assert::AreEqual(0L, m_workArea->GetLayout()->Zones().at(0).GetZoneRect().left);
+            Assert::AreEqual(0L, m_workArea->GetActiveZones().at(0).GetZoneRect().left);
 
             // an outer-edge-only resize is the natural FancyZones resize: no working layout entry is created
             Assert::IsNull(WorkingLayouts::instance().Find(m_workAreaId, m_workArea->GetLayoutId(), BaseRects()));
@@ -635,16 +636,16 @@ namespace FancyZonesUnitTests
             Assert::IsTrue(result.dividerDragged);
             Assert::IsTrue(result.outerEdgeMoved);
             // the outer edge is not a divider: the top row keeps its position
-            Assert::AreEqual(0L, m_workArea->GetLayout()->Zones().at(0).GetZoneRect().top);
+            Assert::AreEqual(0L, m_workArea->GetActiveZones().at(0).GetZoneRect().top);
         }
 
         TEST_METHOD (FinishWithOnlyOuterEdgeLeavesLayoutAlone)
         {
-            const ZonesMap before = m_workArea->GetLayout()->Zones();
+            const ZonesMap before = m_workArea->GetActiveZones();
             m_workArea->FinishEdgeResize({ 0 }, RECT{ -100, 0, 960, 540 }, Left());
 
             Assert::IsNull(WorkingLayouts::instance().Find(m_workAreaId, m_workArea->GetLayoutId(), BaseRects()));
-            const auto& after = m_workArea->GetLayout()->Zones();
+            const auto& after = m_workArea->GetActiveZones();
             Assert::AreEqual(before.size(), after.size());
             for (const auto& [id, zone] : before)
             {
@@ -656,9 +657,9 @@ namespace FancyZonesUnitTests
 
         TEST_METHOD (ZonesRectChangedDetectsMovedDivider)
         {
-            const ZonesMap before = m_workArea->GetLayout()->Zones();
+            const ZonesMap before = m_workArea->GetActiveZones();
             m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 1160, 540 }, Right(), nullptr);
-            const ZonesMap after = m_workArea->GetLayout()->Zones();
+            const ZonesMap after = m_workArea->GetActiveZones();
 
             Assert::IsTrue(WorkArea::ZonesRectChanged(before, after, { 0 }));
             Assert::IsTrue(WorkArea::ZonesRectChanged(before, after, { 1 }));
@@ -671,10 +672,10 @@ namespace FancyZonesUnitTests
 
         TEST_METHOD (ZonesRectChangedFalseWhenNothingMoved)
         {
-            const ZonesMap before = m_workArea->GetLayout()->Zones();
+            const ZonesMap before = m_workArea->GetActiveZones();
             // left edge of zone 0 is on the work-area border: nothing moves
             m_workArea->ApplyEdgeResize({ 0 }, RECT{ -100, 0, 960, 540 }, Left(), nullptr);
-            const ZonesMap after = m_workArea->GetLayout()->Zones();
+            const ZonesMap after = m_workArea->GetActiveZones();
 
             Assert::IsFalse(WorkArea::ZonesRectChanged(before, after, { 0 }));
             Assert::IsFalse(WorkArea::ZonesRectChanged(before, after, { 3 }));
@@ -686,7 +687,7 @@ namespace FancyZonesUnitTests
         TEST_METHOD (DividerIsClampedToMinimumZoneSize)
         {
             m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 1900, 540 }, Right(), nullptr);
-            const auto& zones = m_workArea->GetLayout()->Zones();
+            const auto& zones = m_workArea->GetActiveZones();
             // the right zone keeps at least the fixed minimum track size of 50 px (260 units of 1920 px = 49.9 px)
             const long width = zones.at(1).GetZoneRect().right - zones.at(1).GetZoneRect().left;
             Assert::IsTrue(width >= 49 && width <= 51);
@@ -695,7 +696,7 @@ namespace FancyZonesUnitTests
         TEST_METHOD (DividerIsClampedToMinimumZoneSizeOnTheLeft)
         {
             m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 10, 540 }, Right(), nullptr);
-            const auto& zones = m_workArea->GetLayout()->Zones();
+            const auto& zones = m_workArea->GetActiveZones();
             const long width = zones.at(0).GetZoneRect().right - zones.at(0).GetZoneRect().left;
             Assert::IsTrue(width >= 49 && width <= 51);
         }
@@ -706,7 +707,7 @@ namespace FancyZonesUnitTests
             m_workArea.reset();
             m_workArea = WorkArea::Create({}, m_workAreaId, {}, FancyZonesUtils::Rect(RECT(0, 0, 3840, 2160)));
             m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 3800, 1080 }, Right(), nullptr);
-            const auto& zones = m_workArea->GetLayout()->Zones();
+            const auto& zones = m_workArea->GetActiveZones();
             const long width = zones.at(1).GetZoneRect().right - zones.at(1).GetZoneRect().left;
             Assert::IsTrue(width >= 49 && width <= 51);
         }
@@ -716,7 +717,7 @@ namespace FancyZonesUnitTests
             m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 1160, 540 }, Right(), nullptr);
             m_workArea->FinishEdgeResize({ 0 }, RECT{ 0, 0, 962, 540 }, Right());
 
-            Assert::AreEqual(960L, m_workArea->GetLayout()->Zones().at(0).GetZoneRect().right);
+            Assert::AreEqual(960L, m_workArea->GetActiveZones().at(0).GetZoneRect().right);
             const auto base = BaseRects();
             Assert::IsNull(WorkingLayouts::instance().Find(m_workAreaId, m_workArea->GetLayoutId(), base));
         }
@@ -739,7 +740,7 @@ namespace FancyZonesUnitTests
 
             const auto base = BaseRects();
             Assert::IsNotNull(WorkingLayouts::instance().Find(m_workAreaId, m_workArea->GetLayoutId(), base));
-            Assert::IsTrue(std::abs(m_workArea->GetLayout()->Zones().at(0).GetZoneRect().right - 1160L) <= 1);
+            Assert::AreEqual(1160L, m_workArea->GetActiveZones().at(0).GetZoneRect().right);
         }
 
         TEST_METHOD (FinishKeepsModifiedLayout)
@@ -747,7 +748,9 @@ namespace FancyZonesUnitTests
             m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 1160, 540 }, Right(), nullptr);
             m_workArea->FinishEdgeResize({ 0 }, RECT{ 0, 0, 1160, 540 }, Right());
 
-            Assert::IsTrue(std::abs(m_workArea->GetLayout()->Zones().at(0).GetZoneRect().right - 1160L) <= 1);
+            Assert::AreEqual(1160L, m_workArea->GetActiveZones().at(0).GetZoneRect().right);
+            // the layout (overlay, drop targets) keeps the original line
+            Assert::AreEqual(960L, m_workArea->GetLayout()->Zones().at(0).GetZoneRect().right);
         }
 
         TEST_METHOD (RecreatedWorkAreaKeepsWorkingLayout)
@@ -759,7 +762,9 @@ namespace FancyZonesUnitTests
             m_workArea.reset();
             m_workArea = WorkArea::Create({}, m_workAreaId, {}, m_workAreaRect);
 
-            Assert::IsTrue(std::abs(m_workArea->GetLayout()->Zones().at(0).GetZoneRect().right - 1160L) <= 1);
+            Assert::AreEqual(1160L, m_workArea->GetActiveZones().at(0).GetZoneRect().right);
+            Assert::AreEqual(1160L, m_workArea->GetActiveZones().at(1).GetZoneRect().left);
+            Assert::AreEqual(960L, m_workArea->GetLayout()->Zones().at(0).GetZoneRect().right);
         }
 
         TEST_METHOD (ColumnsTemplateWithSpacingReturnsToTemplateGeometry)
@@ -776,8 +781,7 @@ namespace FancyZonesUnitTests
             m_workArea->InitLayout();
             Assert::IsTrue(m_workArea->SupportsEdgeResize());
 
-            const auto assertTemplate = [this]() {
-                const auto& zones = m_workArea->GetLayout()->Zones();
+            const auto assertTemplate = [](const ZonesMap& zones) {
                 Assert::AreEqual(size_t{ 3 }, zones.size());
                 const std::vector<std::pair<long, long>> expected{ { 16, 634 }, { 650, 1269 }, { 1285, 1904 } };
                 ZoneIndex id = 0;
@@ -792,17 +796,23 @@ namespace FancyZonesUnitTests
             };
 
             // base zones are the template zones
-            assertTemplate();
+            assertTemplate(m_workArea->GetLayout()->Zones());
+            assertTemplate(m_workArea->GetActiveZones());
 
             // drag the right edge of zone 0 to x = 834
             const auto result = m_workArea->ApplyEdgeResize({ 0 }, RECT{ 16, 16, 834, 1064 }, Right(), nullptr);
             Assert::IsTrue(result.changed);
-            Assert::IsTrue(std::abs(m_workArea->GetLayout()->Zones().at(0).GetZoneRect().right - 834L) <= 1);
+            // boundary 834 + 8 = 842 px -> ceil(842 * 10000 / 1920) = 4386 units -> floor(842.11) = 842 -> zone right 834
+            Assert::AreEqual(834L, m_workArea->GetActiveZones().at(0).GetZoneRect().right);
+            // the layout itself keeps the template lines
+            assertTemplate(m_workArea->GetLayout()->Zones());
 
             // release next to the original edge (634): within the snap radius, so the divider returns to base
+            // (636 + 8 = 644 px -> ceil(3354.17) = 3355 units; base 3344; |11| <= 104 units = 20 px)
             m_workArea->FinishEdgeResize({ 0 }, RECT{ 16, 16, 636, 1064 }, Right());
 
-            assertTemplate();
+            assertTemplate(m_workArea->GetLayout()->Zones());
+            assertTemplate(m_workArea->GetActiveZones());
             const auto base = FancyZonesZoneRects::RectsFromGrid(LayoutConfigurator::GridInfo(columns, m_workAreaRect).value());
             Assert::IsNull(WorkingLayouts::instance().Find(m_workAreaId, m_workArea->GetLayoutId(), base));
         }
@@ -823,8 +833,114 @@ namespace FancyZonesUnitTests
             AppliedLayouts::instance().ApplyLayout(m_workAreaId, other);
             m_workArea->InitLayout();
 
-            Assert::AreEqual(size_t{ 3 }, m_workArea->GetLayout()->Zones().size());
-            Assert::IsTrue(std::abs(m_workArea->GetLayout()->Zones().at(0).GetZoneRect().right - 640L) <= 1);
+            Assert::AreEqual(size_t{ 3 }, m_workArea->GetActiveZones().size());
+            Assert::IsTrue(std::abs(m_workArea->GetActiveZones().at(0).GetZoneRect().right - 640L) <= 1);
+            Assert::AreEqual(640L, m_workArea->GetLayout()->Zones().at(0).GetZoneRect().right);
+        }
+
+        TEST_METHOD (BaseLayoutStaysWhileWorkingZonesFollow)
+        {
+            m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 1160, 540 }, Right(), nullptr);
+
+            // the layout (overlay, drop targets, keyboard snapping) keeps the original lines
+            const auto& base = m_workArea->GetLayout()->Zones();
+            Assert::AreEqual(960L, base.at(0).GetZoneRect().right);
+            Assert::AreEqual(960L, base.at(1).GetZoneRect().left);
+
+            // the windows follow the working zones
+            const auto& active = m_workArea->GetActiveZones();
+            Assert::AreEqual(1160L, active.at(0).GetZoneRect().right);
+            Assert::AreEqual(1160L, active.at(1).GetZoneRect().left);
+            Assert::AreEqual(960L, active.at(2).GetZoneRect().right);
+        }
+
+        TEST_METHOD (WorkingEdgeEqualsReleasedFrameEdge)
+        {
+            // ceiling pixel -> unit conversion: floor(ceil(px * 10000 / W) * W / 10000) == px for W < 10000
+            for (const long width : { 1920L, 3840L })
+            {
+                for (const int spacing : { 0, 16 })
+                {
+                    LayoutData grid{
+                        .uuid = FancyZonesUtils::GuidFromString(L"{61FA9FC0-26A6-4B37-A834-491C148DFC58}").value(),
+                        .type = FancyZonesDataTypes::ZoneSetLayoutType::Grid,
+                        .showSpacing = true,
+                        .spacing = spacing,
+                        .zoneCount = 4,
+                        .sensitivityRadius = 20,
+                    };
+                    AppliedLayouts::instance().ApplyLayout(m_workAreaId, grid);
+
+                    for (long frameRight = 1157; frameRight <= 1161; ++frameRight)
+                    {
+                        WorkingLayouts::instance().Clear();
+                        m_workArea.reset();
+                        m_workArea = WorkArea::Create({}, m_workAreaId, {}, FancyZonesUtils::Rect(RECT(0, 0, width, 1080)));
+
+                        const auto result = m_workArea->ApplyEdgeResize({ 0 }, RECT{ spacing, spacing, frameRight, 500 }, Right(), nullptr);
+                        Assert::IsTrue(result.changed);
+                        const auto& zones = m_workArea->GetActiveZones();
+                        Assert::AreEqual(frameRight, zones.at(0).GetZoneRect().right);
+                        Assert::AreEqual(frameRight + spacing, zones.at(1).GetZoneRect().left);
+                    }
+                }
+            }
+        }
+
+        TEST_METHOD (ResetWorkingLayoutRestoresBaseZones)
+        {
+            // no working layout: nothing happens
+            m_workArea->ResetWorkingLayout();
+            Assert::AreEqual(960L, m_workArea->GetActiveZones().at(0).GetZoneRect().right);
+
+            m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 1160, 540 }, Right(), nullptr);
+            m_workArea->FinishEdgeResize({ 0 }, RECT{ 0, 0, 1160, 540 }, Right());
+            Assert::AreEqual(1160L, m_workArea->GetActiveZones().at(0).GetZoneRect().right);
+
+            m_workArea->ResetWorkingLayout();
+            Assert::IsNull(WorkingLayouts::instance().Find(m_workAreaId, m_workArea->GetLayoutId(), BaseRects()));
+            Assert::AreEqual(960L, m_workArea->GetActiveZones().at(0).GetZoneRect().right);
+            Assert::AreEqual(960L, m_workArea->GetActiveZones().at(1).GetZoneRect().left);
+            Assert::AreEqual(960L, m_workArea->GetLayout()->Zones().at(0).GetZoneRect().right);
+        }
+
+        TEST_METHOD (SnapRadiusIs20Px)
+        {
+            // 20 px = floor(20 * 10000 / 1920) = 104 units
+            // 960 + 19 = 979 -> ceil(9790000 / 1920) = 5099 units, |99| <= 104: snaps to exactly 960
+            m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 1160, 540 }, Right(), nullptr);
+            auto result = m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 979, 540 }, Right(), nullptr);
+            Assert::IsTrue(result.atBase);
+            Assert::AreEqual(960L, m_workArea->GetActiveZones().at(0).GetZoneRect().right);
+
+            // 960 + 21 = 981 -> ceil(9810000 / 1920) = 5110 units, |110| > 104: stays at floor(5110 * 1920 / 10000) = 981
+            result = m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 981, 540 }, Right(), nullptr);
+            Assert::IsFalse(result.atBase);
+            Assert::AreEqual(981L, m_workArea->GetActiveZones().at(0).GetZoneRect().right);
+        }
+
+        TEST_METHOD (ReleasedEdgeNeedsPlacementOnlyWhenADraggedEdgeDiffers)
+        {
+            const RECT zone{ 0, 0, 1160, 540 };
+            FancyZonesZoneRects::MovedEdges right;
+            right.right = true;
+
+            Assert::IsFalse(WorkArea::ReleasedEdgeNeedsPlacement(zone, RECT{ 0, 0, 1160, 540 }, right));
+            // a 1 px difference is tolerated (never fight the release position)
+            Assert::IsFalse(WorkArea::ReleasedEdgeNeedsPlacement(zone, RECT{ 0, 0, 1161, 540 }, right));
+            Assert::IsFalse(WorkArea::ReleasedEdgeNeedsPlacement(zone, RECT{ 0, 0, 1159, 540 }, right));
+            // snapped or clamped: more than 1 px
+            Assert::IsTrue(WorkArea::ReleasedEdgeNeedsPlacement(zone, RECT{ 0, 0, 1162, 540 }, right));
+            Assert::IsTrue(WorkArea::ReleasedEdgeNeedsPlacement(zone, RECT{ 0, 0, 1140, 540 }, right));
+            // edges that were not dragged on a divider are ignored
+            Assert::IsFalse(WorkArea::ReleasedEdgeNeedsPlacement(zone, RECT{ 30, 0, 1160, 560 }, right));
+
+            FancyZonesZoneRects::MovedEdges leftAndBottom;
+            leftAndBottom.left = true;
+            leftAndBottom.bottom = true;
+            Assert::IsTrue(WorkArea::ReleasedEdgeNeedsPlacement(zone, RECT{ 30, 0, 1160, 540 }, leftAndBottom));
+            Assert::IsTrue(WorkArea::ReleasedEdgeNeedsPlacement(zone, RECT{ 0, 0, 1160, 560 }, leftAndBottom));
+            Assert::IsFalse(WorkArea::ReleasedEdgeNeedsPlacement(zone, RECT{ 1, 0, 1160, 539 }, leftAndBottom));
         }
     };
 }
