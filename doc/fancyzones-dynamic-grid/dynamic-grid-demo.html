@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FancyZones dynamic grid: design demo</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.4 "Segoe UI", system-ui, sans-serif; background: #1e1f22; color: #ddd; padding: 16px; }
+  h1 { font-size: 16px; margin: 0 0 4px; }
+  p.sub { margin: 0 0 12px; color: #999; }
+  .bar { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+  select, button { background: #2d2f34; color: #ddd; border: 1px solid #444; border-radius: 4px; padding: 4px 8px; font: inherit; }
+  label { color: #aaa; }
+  .wrap { display: flex; gap: 16px; align-items: flex-start; }
+  #desk { position: relative; width: 880px; height: 520px; background: #111214; border: 1px solid #333; flex: none; overflow: hidden; user-select: none; touch-action: none; }
+  .win { position: absolute; background: #2b2d31; border: 1px solid #555; border-radius: 6px; overflow: hidden; display: flex; flex-direction: column; }
+  .win .title { padding: 4px 8px; font-size: 12px; color: #fff; display: flex; justify-content: space-between; }
+  .win .body { flex: 1; display: flex; align-items: center; justify-content: center; color: #888; font-size: 12px; text-align: center; }
+  .win.mod { border-color: #e0a030; }
+  .h { position: absolute; z-index: 5; }
+  .h.n, .h.s { left: 8px; right: 8px; height: 8px; cursor: ns-resize; }
+  .h.e, .h.w { top: 8px; bottom: 8px; width: 8px; cursor: ew-resize; }
+  .h.n { top: -3px; } .h.s { bottom: -3px; } .h.e { right: -3px; } .h.w { left: -3px; }
+  .h.ne, .h.nw, .h.se, .h.sw { width: 14px; height: 14px; z-index: 6; }
+  .h.ne { top: -3px; right: -3px; cursor: nesw-resize; } .h.sw { bottom: -3px; left: -3px; cursor: nesw-resize; }
+  .h.nw { top: -3px; left: -3px; cursor: nwse-resize; } .h.se { bottom: -3px; right: -3px; cursor: nwse-resize; }
+  .h.off { display: none; }
+  svg#cue { position: absolute; inset: 0; pointer-events: none; z-index: 20; }
+  aside { width: 300px; font-size: 13px; }
+  aside h2 { font-size: 13px; margin: 0 0 6px; color: #aaa; text-transform: uppercase; letter-spacing: .05em; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
+  td, th { padding: 2px 4px; text-align: left; border-bottom: 1px solid #2c2d31; }
+  td.mod { color: #e0a030; }
+  td.ok { color: #6c6; }
+  .note { color: #999; font-size: 12px; }
+  .legend span { display: inline-block; width: 22px; border-top: 2px dashed #5aa0ff; vertical-align: middle; margin-right: 6px; }
+</style>
+</head>
+<body>
+<h1>FancyZones dynamic grid: design demo</h1>
+<p class="sub">Drag the edge or corner of any window. The divider line moves, neighbors follow live, nothing overlaps. Drag it back near the dashed line and it snaps to the original position.</p>
+
+<div class="bar">
+  <label>Base layout
+    <select id="layout"></select>
+  </label>
+  <label><input type="checkbox" id="faint" checked> keep base lines visible while modified</label>
+  <label>Zone gap <select id="gap"><option>0</option><option selected>4</option><option>10</option></select> px</label>
+  <span class="note">Demo only: HTML model of the planned behavior, not PowerToys code.</span>
+</div>
+
+<div class="wrap">
+  <div id="desk"><svg id="cue"></svg></div>
+  <aside>
+    <h2>Dividers (percent of work area)</h2>
+    <table id="dividers"></table>
+    <h2>Legend</h2>
+    <p class="legend note"><span></span>base gridline (original layout)<br>
+      <span style="border-color:#6c6"></span>divider at its base position<br>
+      <span style="border-color:#e0a030;border-top-style:solid"></span>modified divider (amber)</p>
+    <p class="note">Rules shown: whole divider line moves; zones are clamped to a minimum size; edges on the work-area border do nothing; a window spanning several zones can only move dividers on its outer sides; when every divider equals its base value, the working layout disappears.</p>
+  </aside>
+</div>
+
+<script>
+const W = 880, H = 520, MIN_PX = 90, SNAP_PX = 8;
+const LAYOUTS = {
+  'Grid 2x2':            { rows: [.5, .5],           cols: [.5, .5],                     map: [[0,1],[2,3]] },
+  'Priority 5 (25/50/25)': { rows: [.5, .5],         cols: [.25, .5, .25],               map: [[0,1,2],[3,1,4]] },
+  'Columns 3':           { rows: [1],                cols: [1/3, 1/3, 1/3],              map: [[0,1,2]] },
+  'Priority 8 (merged)': { rows: [.33, .34, .33],    cols: [.25, .25, .25, .25],         map: [[0,1,2,3],[4,1,2,5],[6,1,2,7]] },
+};
+const COLORS = ['#3b6ea8','#a8553b','#3ba868','#8a3ba8','#a89a3b','#3ba8a8','#a83b6e','#6e6e6e'];
+
+const desk = document.getElementById('desk');
+const cue = document.getElementById('cue');
+let L, base, cur, wins = [], drag = null, gap = 4;
+
+function cum(a) { const r = [0]; a.forEach(v => r.push(r[r.length - 1] + v)); r[r.length - 1] = 1; return r; }
+
+function load(name) {
+  L = LAYOUTS[name];
+  base = { x: cum(L.cols), y: cum(L.rows) };
+  cur = { x: base.x.slice(), y: base.y.slice() };
+  // zones: span of each id in the cell map
+  const z = {};
+  L.map.forEach((row, r) => row.forEach((id, c) => {
+    const s = z[id] || (z[id] = { id, r0: r, r1: r, c0: c, c1: c });
+    s.r0 = Math.min(s.r0, r); s.r1 = Math.max(s.r1, r); s.c0 = Math.min(s.c0, c); s.c1 = Math.max(s.c1, c);
+  }));
+  wins.forEach(w => w.el.remove());
+  wins = Object.values(z).map(zone => makeWin(zone));
+  render();
+}
+
+function makeWin(zone) {
+  const el = document.createElement('div');
+  el.className = 'win';
+  el.innerHTML = '<div class="title" style="background:' + COLORS[zone.id % COLORS.length] + '"><span>Window ' + (zone.id + 1) + '</span><span class="sz"></span></div><div class="body"></div>';
+  ['n','s','e','w','ne','nw','se','sw'].forEach(side => {
+    const h = document.createElement('div');
+    h.className = 'h ' + side; h.dataset.side = side;
+    h.addEventListener('pointerdown', e => startDrag(e, zone, side, h));
+    el.appendChild(h);
+  });
+  desk.appendChild(el);
+  return { zone, el };
+}
+
+// which divider each side controls (null = work-area border, nothing to move)
+function dividerFor(zone, side) {
+  const out = [];
+  if (side.includes('w') && zone.c0 > 0) out.push({ axis: 'x', idx: zone.c0 });
+  if (side.includes('e') && zone.c1 + 1 < L.cols.length) out.push({ axis: 'x', idx: zone.c1 + 1 });
+  if (side.includes('n') && zone.r0 > 0) out.push({ axis: 'y', idx: zone.r0 });
+  if (side.includes('s') && zone.r1 + 1 < L.rows.length) out.push({ axis: 'y', idx: zone.r1 + 1 });
+  return out;
+}
+
+function startDrag(e, zone, side, h) {
+  const divs = dividerFor(zone, side);
+  if (!divs.length) return;                       // outer border: ignored
+  e.preventDefault();
+  h.setPointerCapture(e.pointerId);
+  const rect = desk.getBoundingClientRect();
+  drag = { zone, divs, rect, pid: e.pointerId, h,
+    off: divs.map(d => (d.axis === 'x' ? e.clientX - rect.left : e.clientY - rect.top) - cur[d.axis][d.idx] * (d.axis === 'x' ? W : H)) };
+  h.addEventListener('pointermove', onMove);
+  h.addEventListener('pointerup', endDrag);
+  h.addEventListener('pointercancel', endDrag);
+  render();
+}
+
+let raf = 0, last = null;
+function onMove(e) { last = e; if (!raf) raf = requestAnimationFrame(() => { raf = 0; applyMove(last); }); }
+
+function applyMove(e) {
+  if (!drag) return;
+  drag.divs.forEach((d, i) => {
+    const size = d.axis === 'x' ? W : H;
+    const pos = (d.axis === 'x' ? e.clientX - drag.rect.left : e.clientY - drag.rect.top) - drag.off[i];
+    setEdge(d.axis, d.idx, pos / size);
+  });
+  render();
+}
+
+function setEdge(axis, idx, frac) {
+  const size = axis === 'x' ? W : H, a = cur[axis], b = base[axis];
+  const min = MIN_PX / size;
+  if (Math.abs(frac - b[idx]) * size < SNAP_PX) frac = b[idx];   // magnetic snap to base line
+  frac = Math.max(a[idx - 1] + min, Math.min(a[idx + 1] - min, frac)); // keep every zone above the minimum
+  // lo/hi use neighbours' current values, so whole line moves and the rest of the grid is untouched
+  a[idx] = frac;
+}
+
+function endDrag() {
+  if (!drag) return;
+  drag.h.removeEventListener('pointermove', onMove);
+  drag.h.removeEventListener('pointerup', endDrag);
+  drag.h.removeEventListener('pointercancel', endDrag);
+  drag = null;
+  render();
+}
+
+function isModified(axis, idx) { return Math.abs(cur[axis][idx] - base[axis][idx]) > 1e-6; }
+function anyModified() {
+  for (const ax of ['x','y']) for (let i = 1; i < cur[ax].length - 1; i++) if (isModified(ax, i)) return true;
+  return false;
+}
+
+function render() {
+  const g = gap, half = g / 2;
+  wins.forEach(({ zone, el }) => {
+    const x0 = cur.x[zone.c0] * W, x1 = cur.x[zone.c1 + 1] * W;
+    const y0 = cur.y[zone.r0] * H, y1 = cur.y[zone.r1 + 1] * H;
+    const l = x0 + (zone.c0 === 0 ? g : half), r = x1 - (zone.c1 + 1 === L.cols.length ? g : half);
+    const t = y0 + (zone.r0 === 0 ? g : half), b = y1 - (zone.r1 + 1 === L.rows.length ? g : half);
+    Object.assign(el.style, { left: l + 'px', top: t + 'px', width: (r - l) + 'px', height: (b - t) + 'px' });
+    el.querySelector('.sz').textContent = Math.round(r - l) + ' x ' + Math.round(b - t);
+    const mod = isModified('x', zone.c0) || isModified('x', zone.c1 + 1) || isModified('y', zone.r0) || isModified('y', zone.r1 + 1);
+    el.classList.toggle('mod', mod);
+    el.querySelector('.body').textContent = mod ? 'zone modified' : 'base zone';
+    el.querySelectorAll('.h').forEach(h => h.classList.toggle('off', !dividerFor(zone, h.dataset.side).length));
+  });
+  drawCue();
+  drawTable();
+}
+
+function line(x1, y1, x2, y2, color, dash, w, op) {
+  return '<line x1="' + x1 + '" y1="' + y1 + '" x2="' + x2 + '" y2="' + y2 + '" stroke="' + color + '" stroke-width="' + w + '"' +
+    (dash ? ' stroke-dasharray="6 5"' : '') + ' opacity="' + op + '"/>';
+}
+
+function drawCue() {
+  const dragging = !!drag, modified = anyModified();
+  const show = dragging || (modified && document.getElementById('faint').checked);
+  const active = dragging ? drag.divs : [];
+  let s = '';
+  if (show) {
+    for (const ax of ['x','y']) {
+      for (let i = 1; i < base[ax].length - 1; i++) {
+        const p = base[ax][i] * (ax === 'x' ? W : H);
+        const atBase = !isModified(ax, i);
+        const isActive = active.some(d => d.axis === ax && d.idx === i);
+        const color = isActive && atBase ? '#6c6' : '#5aa0ff';
+        const op = dragging ? (isActive ? 1 : .45) : .3;
+        s += ax === 'x' ? line(p, 0, p, H, color, true, isActive ? 2 : 1, op) : line(0, p, W, p, color, true, isActive ? 2 : 1, op);
+      }
+    }
+  }
+  // amber marker on every modified divider (current position)
+  for (const ax of ['x','y']) for (let i = 1; i < cur[ax].length - 1; i++) if (isModified(ax, i)) {
+    const p = cur[ax][i] * (ax === 'x' ? W : H);
+    s += ax === 'x' ? line(p, 0, p, H, '#e0a030', false, 1, .35) : line(0, p, W, p, '#e0a030', false, 1, .35);
+  }
+  cue.innerHTML = s;
+}
+
+function drawTable() {
+  let h = '<tr><th></th><th>base</th><th>now</th></tr>';
+  for (const ax of ['x','y']) for (let i = 1; i < cur[ax].length - 1; i++) {
+    const mod = isModified(ax, i);
+    h += '<tr><td>' + (ax === 'x' ? 'column ' : 'row ') + i + '</td><td>' + (base[ax][i] * 100).toFixed(1) + '%</td>' +
+      '<td class="' + (mod ? 'mod' : 'ok') + '">' + (cur[ax][i] * 100).toFixed(1) + '%' + (mod ? '' : ' (base)') + '</td></tr>';
+  }
+  h += '<tr><td colspan="3" class="note">' + (anyModified() ? 'Working layout active' : 'No working layout (base)') + '</td></tr>';
+  document.getElementById('dividers').innerHTML = h;
+}
+
+const sel = document.getElementById('layout');
+Object.keys(LAYOUTS).forEach(n => sel.add(new Option(n, n)));
+sel.addEventListener('change', () => load(sel.value));
+document.getElementById('faint').addEventListener('change', render);
+document.getElementById('gap').addEventListener('change', e => { gap = +e.target.value; render(); });
+load(sel.value);
+</script>
+</body>
+</html>
