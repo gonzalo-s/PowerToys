@@ -1049,5 +1049,371 @@ namespace FancyZonesUnitTests
             Assert::IsTrue(WorkArea::ReleasedEdgeNeedsPlacement(zone, RECT{ 0, 0, 1160, 560 }, leftAndBottom));
             Assert::IsFalse(WorkArea::ReleasedEdgeNeedsPlacement(zone, RECT{ 1, 0, 1160, 539 }, leftAndBottom));
         }
+
+        // ---- Drag simulation (wave 7): the frames a real drag produces, fed exactly as WindowResizeHandler does ----
+
+        static long& FrameEdge(RECT& rect, FancyZonesZoneRects::Side side) noexcept
+        {
+            using FancyZonesZoneRects::Side;
+            return side == Side::Left ? rect.left : side == Side::Top ? rect.top : side == Side::Right ? rect.right : rect.bottom;
+        }
+
+        static constexpr bool IsHighSide(FancyZonesZoneRects::Side side) noexcept
+        {
+            return side == FancyZonesZoneRects::Side::Right || side == FancyZonesZoneRects::Side::Bottom;
+        }
+
+        static constexpr bool IsVerticalSide(FancyZonesZoneRects::Side side) noexcept
+        {
+            return side == FancyZonesZoneRects::Side::Left || side == FancyZonesZoneRects::Side::Right;
+        }
+
+        static constexpr FancyZonesZoneRects::Side Opposite(FancyZonesZoneRects::Side side) noexcept
+        {
+            using FancyZonesZoneRects::Side;
+            return side == Side::Left ? Side::Right : side == Side::Right ? Side::Left : side == Side::Top ? Side::Bottom : Side::Top;
+        }
+
+        // floor(length * units / 10000): the pixel of a unit coordinate (ScaleUnits / CalculateGridZones maths)
+        static constexpr long Px(long length, int units) noexcept
+        {
+            return static_cast<long>(static_cast<long long>(length) * units / 10000);
+        }
+
+        // floor(50 * 10000 / length): the 50 px minimum zone size in units
+        static constexpr int MinUnits(long length) noexcept
+        {
+            return static_cast<int>(500000LL / length);
+        }
+
+        void RecreateWorkArea(FancyZonesDataTypes::ZoneSetLayoutType type, int zoneCount, int spacing, long width, long height)
+        {
+            WorkingLayouts::instance().Clear();
+            LayoutData layout{
+                .uuid = GUID_NULL,
+                .type = type,
+                .showSpacing = spacing > 0,
+                .spacing = spacing,
+                .zoneCount = zoneCount,
+                .sensitivityRadius = 20,
+            };
+            AppliedLayouts::instance().ApplyLayout(m_workAreaId, layout);
+            m_workArea.reset();
+            m_workArea = WorkArea::Create({}, m_workAreaId, {}, FancyZonesUtils::Rect(RECT(0, 0, width, height)));
+        }
+
+        RECT ActiveRect(ZoneIndex zone) const
+        {
+            return m_workArea->GetActiveZones().at(zone).GetZoneRect();
+        }
+
+        // What WindowResizeHandler does: every live frame accumulates the moved edges from the start frame
+        // (tolerance 2 px) and calls ApplyEdgeResize; the release frame goes through FinishEdgeResize.
+        void SimulateDrag(const ZoneIndexSet& zones, const RECT& start, const std::vector<RECT>& liveFrames, const RECT& release)
+        {
+            FancyZonesZoneRects::MovedEdges moved;
+            for (const RECT& frame : liveFrames)
+            {
+                moved |= FancyZonesZoneRects::DetectMovedEdges(start, frame, 2);
+                m_workArea->ApplyEdgeResize(zones, frame, moved, nullptr);
+            }
+
+            moved |= FancyZonesZoneRects::DetectMovedEdges(start, release, 2);
+            m_workArea->FinishEdgeResize(zones, release, moved, nullptr);
+        }
+
+        // Drags one side of the window in zone from its current (start) frame to edge position p: a detour of 100 px
+        // first (so the edge counts as moved even when p is next to the start edge), then halfway, then p (included as
+        // a live frame or only as the release frame, to cover the throttled last update).
+        void DragSideTo(ZoneIndex zone, FancyZonesZoneRects::Side side, long p, bool releaseAlsoLive)
+        {
+            const RECT start = ActiveRect(zone);
+            RECT startCopy = start;
+            const long startEdge = FrameEdge(startCopy, side);
+            const long detour = startEdge + (p >= startEdge ? 100 : -100);
+            std::vector<RECT> live;
+            for (const long edge : { detour, (detour + p) / 2, p })
+            {
+                RECT frame = start;
+                FrameEdge(frame, side) = edge;
+                live.push_back(frame);
+            }
+
+            if (!releaseAlsoLive)
+            {
+                live.pop_back();
+            }
+
+            RECT release = start;
+            FrameEdge(release, side) = p;
+            SimulateDrag({ zone }, start, live, release);
+        }
+
+        // Expected window edge (frame coordinates, work area at 0,0) after releasing the dragged side at p, from the
+        // release rule: zone boundary b = p +/- spacing / 2; a boundary within 19 px of an original gridline g lands
+        // exactly on g (the 20 px magnet; 20..21 px depends on the unit rounding and is ambiguous); otherwise b
+        // itself; then clamped to [floor(L * lowUnits / 10000), floor(L * highUnits / 10000)], the limits where the
+        // zones on either side of the wall keep the minimum size. nullopt = ambiguous.
+        static std::optional<long> ExpectedEdge(long p, bool high, long length, int spacing, const std::vector<int>& lineUnits, int lowUnits, int highUnits)
+        {
+            const long half = spacing / 2;
+            const long b = high ? p + half : p - half;
+            const long lowPx = Px(length, lowUnits);
+            const long highPx = Px(length, highUnits);
+            const auto clampPx = [&](long value) { return (std::min)((std::max)(value, lowPx), highPx); };
+
+            std::vector<long> outcomes;
+            bool snapped = false;
+            for (const int line : lineUnits)
+            {
+                const long g = Px(length, line);
+                const long distance = std::abs(b - g);
+                if (distance <= 19)
+                {
+                    outcomes = { clampPx(g) };
+                    snapped = true;
+                    break;
+                }
+
+                if (distance <= 21)
+                {
+                    outcomes = { clampPx(g), clampPx(b) };
+                    snapped = true;
+                    break;
+                }
+            }
+
+            if (!snapped)
+            {
+                outcomes = { clampPx(b) };
+            }
+
+            if (outcomes.size() == 2 && outcomes[0] != outcomes[1])
+            {
+                return std::nullopt;
+            }
+
+            const long boundary = outcomes[0];
+            return high ? boundary - half : boundary + half;
+        }
+
+        struct SweepCase
+        {
+            FancyZonesDataTypes::ZoneSetLayoutType type;
+            int zoneCount;
+            ZoneIndex zone; // the dragged window's zone
+            FancyZonesZoneRects::Side side;
+            ZoneIndex neighbour; // a zone on the other side of the wall
+            int lowFarUnits; // far side of the zones below the wall (their low end, the wall's lower limit is it + min)
+            int highFarUnits; // far side of the zones above the wall (their high end, the upper limit is it - min)
+            std::vector<int> lineUnits; // original gridlines on the side's axis
+        };
+
+        // Hand-derived from the templates: Grid 4 = 2 x 2 (lines x 5000, y 5000); PriorityGrid 5 = columns
+        // 2500 | 5000 | 2500, rows 5000 | 5000, zones 0 1 2 / 3 1 4 (zone 1 spans both rows).
+        static std::vector<SweepCase> SweepCases()
+        {
+            using FancyZonesDataTypes::ZoneSetLayoutType;
+            using FancyZonesZoneRects::Side;
+            return {
+                // Grid 4: zone 0 right / zone 1 left move the top-row wall between 0..10000; bottom/top likewise.
+                { ZoneSetLayoutType::Grid, 4, 0, Side::Right, 1, 0, 10000, { 5000 } },
+                { ZoneSetLayoutType::Grid, 4, 1, Side::Left, 0, 0, 10000, { 5000 } },
+                { ZoneSetLayoutType::Grid, 4, 0, Side::Bottom, 2, 0, 10000, { 5000 } },
+                { ZoneSetLayoutType::Grid, 4, 3, Side::Top, 1, 0, 10000, { 5000 } },
+                // PriorityGrid 5: zone 0 right pulls zone 3 in (both touch zone 1): wall between 0 and zone 1's right
+                // (7500); zone 2 left (with zone 4) between zone 1's left (2500) and 10000; zone 1 left between 0 and 7500.
+                { ZoneSetLayoutType::PriorityGrid, 5, 0, Side::Right, 1, 0, 7500, { 2500, 7500 } },
+                { ZoneSetLayoutType::PriorityGrid, 5, 2, Side::Left, 1, 2500, 10000, { 2500, 7500 } },
+                { ZoneSetLayoutType::PriorityGrid, 5, 1, Side::Left, 0, 0, 7500, { 2500, 7500 } },
+                { ZoneSetLayoutType::PriorityGrid, 5, 0, Side::Bottom, 3, 0, 10000, { 5000 } },
+                { ZoneSetLayoutType::PriorityGrid, 5, 4, Side::Top, 2, 0, 10000, { 5000 } },
+            };
+        }
+
+        // Runs one released position through a fresh drag and checks the dragged edge and the neighbour's edge.
+        // Returns false when the position is in the ambiguous 20..21 px band of a gridline (not asserted).
+        bool CheckRelease(const SweepCase& c, int spacing, long length, long p, bool releaseAlsoLive)
+        {
+            m_workArea->ResetWorkingLayout();
+            const int minUnits = MinUnits(length);
+            const bool high = IsHighSide(c.side);
+            const auto expected = ExpectedEdge(p, high, length, spacing, c.lineUnits, c.lowFarUnits + minUnits, c.highFarUnits - minUnits);
+            if (!expected)
+            {
+                return false;
+            }
+
+            DragSideTo(c.zone, c.side, p, releaseAlsoLive);
+
+            RECT dragged = ActiveRect(c.zone);
+            RECT neighbour = ActiveRect(c.neighbour);
+            const long actual = FrameEdge(dragged, c.side);
+            const long actualNeighbour = FrameEdge(neighbour, Opposite(c.side));
+            const long expectedNeighbour = high ? *expected + spacing : *expected - spacing;
+            if (actual != *expected || actualNeighbour != expectedNeighbour)
+            {
+                const std::wstring message = L"zone " + std::to_wstring(c.zone) + L" side " + std::to_wstring(static_cast<int>(c.side)) +
+                                             L" spacing " + std::to_wstring(spacing) + L" length " + std::to_wstring(length) +
+                                             L" released " + std::to_wstring(p) + L" expected " + std::to_wstring(*expected) +
+                                             L" actual " + std::to_wstring(actual) + L" neighbour " + std::to_wstring(actualNeighbour) +
+                                             L" expected neighbour " + std::to_wstring(expectedNeighbour);
+                Assert::Fail(message.c_str());
+            }
+
+            return true;
+        }
+
+        void RunSweep(long width, long height)
+        {
+            for (const auto& c : SweepCases())
+            {
+                for (const int spacing : { 0, 16 })
+                {
+                    RecreateWorkArea(c.type, c.zoneCount, spacing, width, height);
+                    const long length = IsVerticalSide(c.side) ? width : height;
+                    const int minUnits = MinUnits(length);
+                    int checkedCount = 0;
+                    bool live = false;
+
+                    // the whole axis, every 7 px
+                    for (long p = 0; p <= length; p += 7)
+                    {
+                        live = !live;
+                        checkedCount += CheckRelease(c, spacing, length, p, live) ? 1 : 0;
+                    }
+
+                    // every pixel around both clamp limits (window edge = limit boundary -/+ spacing / 2)
+                    const long half = spacing / 2;
+                    const bool high = IsHighSide(c.side);
+                    for (const long limit : { Px(length, c.lowFarUnits + minUnits), Px(length, c.highFarUnits - minUnits) })
+                    {
+                        const long edge = high ? limit - half : limit + half;
+                        for (long p = edge - 12; p <= edge + 12; ++p)
+                        {
+                            live = !live;
+                            checkedCount += CheckRelease(c, spacing, length, p, live) ? 1 : 0;
+                        }
+                    }
+
+                    Assert::IsTrue(checkedCount > 100);
+                }
+            }
+        }
+
+        TEST_METHOD (DragSweepReleasedEdgeIsExact1920x1080)
+        {
+            RunSweep(1920, 1080);
+        }
+
+        TEST_METHOD (DragSweepReleasedEdgeIsExact3840x2160)
+        {
+            RunSweep(3840, 2160);
+        }
+
+        TEST_METHOD (ClampLimitsAreFiftyPixelsFromTheNeighboursFarSide)
+        {
+            using FancyZonesZoneRects::Side;
+
+            // Grid 4, 1920: min = floor(500000 / 1920) = 260 units; upper limit 9740 -> floor(1870.08) = 1870 px, so the
+            // neighbour keeps 1920 - 1870 = 50 px; lower limit 260 -> floor(49.92) = 49 px.
+            RecreateWorkArea(FancyZonesDataTypes::ZoneSetLayoutType::Grid, 4, 0, 1920, 1080);
+            DragSideTo(0, Side::Right, 1915, true);
+            Assert::AreEqual(1870L, ActiveRect(0).right);
+            Assert::AreEqual(1870L, ActiveRect(1).left);
+            DragSideTo(0, Side::Right, 5, false);
+            Assert::AreEqual(49L, ActiveRect(0).right);
+
+            // PriorityGrid 5, 1920: zone 0's right wall (with zone 3) stops 50 px before zone 1's right side (7500 ->
+            // 1440 px): 7500 - 260 = 7240 -> floor(1390.08) = 1390 px. Nothing larger than the 50 px minimum.
+            RecreateWorkArea(FancyZonesDataTypes::ZoneSetLayoutType::PriorityGrid, 5, 0, 1920, 1080);
+            DragSideTo(0, Side::Right, 1700, true);
+            Assert::AreEqual(1390L, ActiveRect(0).right);
+            Assert::AreEqual(1390L, ActiveRect(3).right);
+            Assert::AreEqual(1390L, ActiveRect(1).left);
+            Assert::AreEqual(1440L, ActiveRect(1).right);
+
+            // 3840 x 2160, spacing 16: min = 130 units; 7370 -> floor(2830.08) = 2830 px boundary, window edge 2822,
+            // zone 1 starts at 2838 and ends at 2880 - 8 = 2872.
+            RecreateWorkArea(FancyZonesDataTypes::ZoneSetLayoutType::PriorityGrid, 5, 16, 3840, 2160);
+            DragSideTo(0, Side::Right, 3500, false);
+            Assert::AreEqual(2822L, ActiveRect(0).right);
+            Assert::AreEqual(2838L, ActiveRect(1).left);
+            Assert::AreEqual(2872L, ActiveRect(1).right);
+        }
+
+        TEST_METHOD (MultiStepDragEndsAtTheReleasedPosition)
+        {
+            // Grid 4, 1920 x 1080, zone 0's right edge: live 1500, 700, 1100, released at 1100
+            RecreateWorkArea(FancyZonesDataTypes::ZoneSetLayoutType::Grid, 4, 0, 1920, 1080);
+            const RECT start{ 0, 0, 960, 540 };
+            const RECT zone0 = ActiveRect(0);
+            Assert::IsTrue(EqualRect(&start, &zone0) != FALSE);
+            SimulateDrag({ 0 }, start, { RECT{ 0, 0, 1500, 540 }, RECT{ 0, 0, 700, 540 }, RECT{ 0, 0, 1100, 540 } }, RECT{ 0, 0, 1100, 540 });
+            Assert::AreEqual(1100L, ActiveRect(0).right);
+            Assert::AreEqual(1100L, ActiveRect(1).left);
+            Assert::AreEqual(960L, ActiveRect(2).right); // the bottom row is not touched
+
+            // the release frame differs from the last (throttled) live frame
+            SimulateDrag({ 0 }, RECT{ 0, 0, 1100, 540 }, { RECT{ 0, 0, 1500, 540 }, RECT{ 0, 0, 700, 540 } }, RECT{ 0, 0, 1234, 540 });
+            Assert::AreEqual(1234L, ActiveRect(0).right);
+            Assert::AreEqual(1234L, ActiveRect(1).left);
+        }
+
+        TEST_METHOD (SecondDragStartsFromTheFirstDropAndEndsAtItsRelease)
+        {
+            RecreateWorkArea(FancyZonesDataTypes::ZoneSetLayoutType::Grid, 4, 16, 1920, 1080);
+            // spacing 16: zone 0 = 16, 16, 952, 532
+            const RECT start{ 16, 16, 952, 532 };
+            const RECT zone0 = ActiveRect(0);
+            Assert::IsTrue(EqualRect(&start, &zone0) != FALSE);
+
+            SimulateDrag({ 0 }, start, { RECT{ 16, 16, 1300, 532 } }, RECT{ 16, 16, 1300, 532 });
+            Assert::AreEqual(1300L, ActiveRect(0).right);
+            Assert::AreEqual(1316L, ActiveRect(1).left);
+
+            // second drag, fresh start frame = the first drop
+            SimulateDrag({ 0 }, RECT{ 16, 16, 1300, 532 }, { RECT{ 16, 16, 1600, 532 } }, RECT{ 16, 16, 1580, 532 });
+            Assert::AreEqual(1580L, ActiveRect(0).right);
+            Assert::AreEqual(1596L, ActiveRect(1).left);
+
+            // third drag back to the left, far from the line
+            SimulateDrag({ 0 }, RECT{ 16, 16, 1580, 532 }, { RECT{ 16, 16, 1200, 532 } }, RECT{ 16, 16, 700, 532 });
+            Assert::AreEqual(700L, ActiveRect(0).right);
+            Assert::AreEqual(716L, ActiveRect(1).left);
+
+            // the neighbour's own drag of the same wall, from its frame (716) to 1400 (frame left 1400, boundary 1392)
+            SimulateDrag({ 1 }, ActiveRect(1), { RECT{ 1000, 16, 1904, 532 } }, RECT{ 1400, 16, 1904, 532 });
+            Assert::AreEqual(1400L, ActiveRect(1).left);
+            Assert::AreEqual(1384L, ActiveRect(0).right);
+        }
+
+        TEST_METHOD (OvershootIntoTheNeighboursMinimumThenBack)
+        {
+            // Grid 4, 1920: the live drag hits the clamp (1870), comes back and is released at 1400
+            RecreateWorkArea(FancyZonesDataTypes::ZoneSetLayoutType::Grid, 4, 0, 1920, 1080);
+            SimulateDrag({ 0 }, RECT{ 0, 0, 960, 540 }, { RECT{ 0, 0, 1910, 540 }, RECT{ 0, 0, 1919, 540 }, RECT{ 0, 0, 1400, 540 } }, RECT{ 0, 0, 1400, 540 });
+            Assert::AreEqual(1400L, ActiveRect(0).right);
+            Assert::AreEqual(1400L, ActiveRect(1).left);
+
+            // overshoot and release past the limit: the clamp limit, not an earlier position
+            SimulateDrag({ 0 }, RECT{ 0, 0, 1400, 540 }, { RECT{ 0, 0, 1700, 540 }, RECT{ 0, 0, 1910, 540 } }, RECT{ 0, 0, 1912, 540 });
+            Assert::AreEqual(1870L, ActiveRect(0).right);
+
+            // next drag starts at the clamp limit (the window was placed there) and goes back past the original line
+            SimulateDrag({ 0 }, RECT{ 0, 0, 1870, 540 }, { RECT{ 0, 0, 1880, 540 }, RECT{ 0, 0, 1000, 540 } }, RECT{ 0, 0, 600, 540 });
+            Assert::AreEqual(600L, ActiveRect(0).right);
+            Assert::AreEqual(600L, ActiveRect(1).left);
+
+            // PriorityGrid 5, 3840 x 2160 spacing 16: overshoot past zone 1's minimum (window edge limit 2822), back
+            // to 2000, released at 2000
+            RecreateWorkArea(FancyZonesDataTypes::ZoneSetLayoutType::PriorityGrid, 5, 16, 3840, 2160);
+            const RECT start = ActiveRect(0); // 16, 16, 952, 1072
+            Assert::AreEqual(952L, start.right);
+            SimulateDrag({ 0 }, start, { RECT{ 16, 16, 3000, 1072 }, RECT{ 16, 16, 3500, 1072 }, RECT{ 16, 16, 1500, 1072 } }, RECT{ 16, 16, 2000, 1072 });
+            Assert::AreEqual(2000L, ActiveRect(0).right);
+            Assert::AreEqual(2000L, ActiveRect(3).right);
+            Assert::AreEqual(2016L, ActiveRect(1).left);
+        }
     };
 }
