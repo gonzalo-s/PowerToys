@@ -18,6 +18,39 @@ namespace FancyZonesUnitTests
             return LayoutData{ .type = type, .showSpacing = false, .spacing = 0, .zoneCount = zoneCount };
         }
 
+        static FancyZonesUtils::Rect WorkArea1080()
+        {
+            return FancyZonesUtils::Rect(RECT{ 0, 0, 1920, 1080 });
+        }
+
+        static LayoutData SpacedData(ZoneSetLayoutType type, int zoneCount, int spacing)
+        {
+            return LayoutData{ .type = type, .showSpacing = true, .spacing = spacing, .zoneCount = zoneCount };
+        }
+
+        // Zones produced by the grid formula from GridInfo must match the template zones within 1 px on every edge.
+        static void AssertGridMatchesTemplate(const ZonesMap& expected, const LayoutData& data)
+        {
+            const auto workArea = WorkArea1080();
+            const int spacing = data.showSpacing ? data.spacing : 0;
+            const auto info = LayoutConfigurator::GridInfo(data, workArea);
+            Assert::IsTrue(info.has_value());
+            Assert::AreEqual(10000, Sum(info->columnsPercents()));
+            Assert::AreEqual(10000, Sum(info->rowsPercents()));
+
+            const auto actual = LayoutConfigurator::GridZones(workArea, info.value(), spacing);
+            Assert::AreEqual(expected.size(), actual.size());
+            for (const auto& [id, zone] : expected)
+            {
+                const RECT e = zone.GetZoneRect();
+                const RECT a = actual.at(id).GetZoneRect();
+                Assert::IsTrue(std::abs(e.left - a.left) <= 1);
+                Assert::IsTrue(std::abs(e.top - a.top) <= 1);
+                Assert::IsTrue(std::abs(e.right - a.right) <= 1);
+                Assert::IsTrue(std::abs(e.bottom - a.bottom) <= 1);
+            }
+        }
+
         static constexpr const wchar_t* GridUuid = L"{ACE817FD-2C51-4E13-903A-84CAB86FD17D}";
         static constexpr const wchar_t* CanvasUuid = L"{ACE817FD-2C51-4E13-903A-84CAB86FD17C}";
 
@@ -126,9 +159,44 @@ namespace FancyZonesUnitTests
         }
 
     public:
+        TEST_METHOD (ColumnsTemplateWithSpacingHardCodedEdges)
+        {
+            // Template geometry of Columns 3, spacing 16 on 1920x1080
+            const ZonesMap zones = LayoutConfigurator::Columns(WorkArea1080(), 3, 16);
+            Assert::AreEqual((size_t)3, zones.size());
+            AssertRect(zones, 0, 16, 16, 634, 1064);
+            AssertRect(zones, 1, 650, 16, 1269, 1064);
+            AssertRect(zones, 2, 1285, 16, 1904, 1064);
+        }
+
+        TEST_METHOD (GridInfoColumnsWithSpacingMatchesTemplate)
+        {
+            const auto data = SpacedData(ZoneSetLayoutType::Columns, 3, 16);
+            AssertGridMatchesTemplate(LayoutConfigurator::Columns(WorkArea1080(), 3, 16), data);
+        }
+
+        TEST_METHOD (GridInfoRowsWithSpacingMatchesTemplate)
+        {
+            const auto data = SpacedData(ZoneSetLayoutType::Rows, 3, 16);
+            AssertGridMatchesTemplate(LayoutConfigurator::Rows(WorkArea1080(), 3, 16), data);
+        }
+
+        TEST_METHOD (GridInfoColumnsWithoutSpacingMatchesTemplate)
+        {
+            AssertGridMatchesTemplate(LayoutConfigurator::Columns(WorkArea1080(), 4, 0), SpacedData(ZoneSetLayoutType::Columns, 4, 0));
+        }
+
+        TEST_METHOD (GridInfoIgnoresSpacingWhenHidden)
+        {
+            // spacing is configured but not shown: the template is built with spacing 0
+            LayoutData data = SpacedData(ZoneSetLayoutType::Columns, 3, 16);
+            data.showSpacing = false;
+            AssertGridMatchesTemplate(LayoutConfigurator::Columns(WorkArea1080(), 3, 0), data);
+        }
+
         TEST_METHOD (GridInfoForGridLayout)
         {
-            const auto info = LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::Grid, 4));
+            const auto info = LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::Grid, 4), WorkArea1080());
             Assert::IsTrue(info.has_value());
             Assert::AreEqual(2, info->rows());
             Assert::AreEqual(2, info->columns());
@@ -139,7 +207,7 @@ namespace FancyZonesUnitTests
 
         TEST_METHOD (GridInfoForColumnsLayout)
         {
-            const auto info = LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::Columns, 3));
+            const auto info = LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::Columns, 3), WorkArea1080());
             Assert::IsTrue(info.has_value());
             Assert::AreEqual(1, info->rows());
             Assert::AreEqual(3, info->columns());
@@ -149,7 +217,7 @@ namespace FancyZonesUnitTests
 
         TEST_METHOD (GridInfoForRowsLayout)
         {
-            const auto info = LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::Rows, 3));
+            const auto info = LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::Rows, 3), WorkArea1080());
             Assert::IsTrue(info.has_value());
             Assert::AreEqual(3, info->rows());
             Assert::AreEqual(1, info->columns());
@@ -159,7 +227,7 @@ namespace FancyZonesUnitTests
 
         TEST_METHOD (GridInfoForPriorityGridLayout)
         {
-            const auto info = LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::PriorityGrid, 3));
+            const auto info = LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::PriorityGrid, 3), WorkArea1080());
             Assert::IsTrue(info.has_value());
             Assert::AreEqual(1, info->rows());
             Assert::AreEqual(3, info->columns());
@@ -170,13 +238,13 @@ namespace FancyZonesUnitTests
 
         TEST_METHOD (GridInfoUnsupportedTypes)
         {
-            Assert::IsFalse(LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::Focus, 3)).has_value());
-            Assert::IsFalse(LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::Blank, 0)).has_value());
+            Assert::IsFalse(LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::Focus, 3), WorkArea1080()).has_value());
+            Assert::IsFalse(LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::Blank, 0), WorkArea1080()).has_value());
         }
 
         TEST_METHOD (GridInfoFiveZones)
         {
-            const auto info = LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::Grid, 5));
+            const auto info = LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::Grid, 5), WorkArea1080());
             Assert::IsTrue(info.has_value());
             Assert::AreEqual(2, info->rows());
             Assert::AreEqual(3, info->columns());
@@ -188,7 +256,7 @@ namespace FancyZonesUnitTests
 
         TEST_METHOD (GridInfoTwoZones)
         {
-            const auto info = LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::Grid, 2));
+            const auto info = LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::Grid, 2), WorkArea1080());
             Assert::IsTrue(info.has_value());
             Assert::AreEqual(1, info->rows());
             Assert::AreEqual(2, info->columns());
@@ -197,7 +265,7 @@ namespace FancyZonesUnitTests
 
         TEST_METHOD (GridInfoOneZone)
         {
-            const auto info = LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::Grid, 1));
+            const auto info = LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::Grid, 1), WorkArea1080());
             Assert::IsTrue(info.has_value());
             Assert::AreEqual(1, info->rows());
             Assert::AreEqual(1, info->columns());
@@ -209,7 +277,7 @@ namespace FancyZonesUnitTests
             // columns: 0..639, 639..1279, 1279..1920 (3333/6666/10000 of 1920, integer division); rows: 0..540, 540..1080
             const FancyZonesUtils::Rect workArea{ RECT{ 0, 0, 1920, 1080 } };
             const ZonesMap grid = LayoutConfigurator::Grid(workArea, 5, 0);
-            const ZonesMap viaInfo = LayoutConfigurator::GridZones(workArea, LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::Grid, 5)).value(), 0);
+            const ZonesMap viaInfo = LayoutConfigurator::GridZones(workArea, LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::Grid, 5), WorkArea1080()).value(), 0);
 
             for (const ZonesMap* zones : { &grid, &viaInfo })
             {
@@ -224,7 +292,7 @@ namespace FancyZonesUnitTests
 
         TEST_METHOD (PriorityGridFourZonesUsesPredefinedLayout)
         {
-            const auto info = LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::PriorityGrid, 4));
+            const auto info = LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::PriorityGrid, 4), WorkArea1080());
             Assert::IsTrue(info.has_value());
             Assert::AreEqual(2, info->rows());
             Assert::AreEqual(3, info->columns());
@@ -234,7 +302,7 @@ namespace FancyZonesUnitTests
 
         TEST_METHOD (PriorityGridElevenZonesFallsBackToGrid)
         {
-            const auto info = LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::PriorityGrid, 11));
+            const auto info = LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::PriorityGrid, 11), WorkArea1080());
             Assert::IsTrue(info.has_value());
             Assert::AreEqual(3, info->rows());
             Assert::AreEqual(4, info->columns());
@@ -243,7 +311,7 @@ namespace FancyZonesUnitTests
 
         TEST_METHOD (PriorityGridTwelveZonesFallsBackToGrid)
         {
-            const auto info = LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::PriorityGrid, 12));
+            const auto info = LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::PriorityGrid, 12), WorkArea1080());
             Assert::IsTrue(info.has_value());
             Assert::AreEqual(3, info->rows());
             Assert::AreEqual(4, info->columns());
@@ -255,10 +323,10 @@ namespace FancyZonesUnitTests
         {
             for (int count : { 0, -1, -5 })
             {
-                Assert::IsFalse(LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::Columns, count)).has_value());
-                Assert::IsFalse(LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::Rows, count)).has_value());
-                Assert::IsFalse(LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::Grid, count)).has_value());
-                Assert::IsFalse(LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::PriorityGrid, count)).has_value());
+                Assert::IsFalse(LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::Columns, count), WorkArea1080()).has_value());
+                Assert::IsFalse(LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::Rows, count), WorkArea1080()).has_value());
+                Assert::IsFalse(LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::Grid, count), WorkArea1080()).has_value());
+                Assert::IsFalse(LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::PriorityGrid, count), WorkArea1080()).has_value());
             }
         }
 
@@ -268,7 +336,7 @@ namespace FancyZonesUnitTests
             layouts.Append(CustomGridJson());
             SaveCustomLayouts(layouts);
 
-            const auto info = LayoutConfigurator::GridInfo(CustomData(GridUuid));
+            const auto info = LayoutConfigurator::GridInfo(CustomData(GridUuid), WorkArea1080());
             Assert::IsTrue(info.has_value());
             Assert::AreEqual(2, info->rows());
             Assert::AreEqual(3, info->columns());
@@ -283,7 +351,7 @@ namespace FancyZonesUnitTests
             layouts.Append(CustomCanvasJson());
             SaveCustomLayouts(layouts);
 
-            Assert::IsFalse(LayoutConfigurator::GridInfo(CustomData(CanvasUuid)).has_value());
+            Assert::IsFalse(LayoutConfigurator::GridInfo(CustomData(CanvasUuid), WorkArea1080()).has_value());
         }
 
         TEST_METHOD (GridInfoUnknownCustomLayoutReturnsNullopt)
@@ -292,7 +360,7 @@ namespace FancyZonesUnitTests
             layouts.Append(CustomGridJson());
             SaveCustomLayouts(layouts);
 
-            Assert::IsFalse(LayoutConfigurator::GridInfo(CustomData(L"{11111111-2222-3333-4444-555555555555}")).has_value());
+            Assert::IsFalse(LayoutConfigurator::GridInfo(CustomData(L"{11111111-2222-3333-4444-555555555555}"), WorkArea1080()).has_value());
         }
 
         TEST_METHOD (GridZonesMatchesGridLayout)
@@ -300,7 +368,7 @@ namespace FancyZonesUnitTests
             const FancyZonesUtils::Rect workArea{ RECT{ 0, 0, 1920, 1080 } };
             const auto data = Data(ZoneSetLayoutType::Grid, 4);
             const auto expected = LayoutConfigurator::Grid(workArea, 4, 0);
-            const auto actual = LayoutConfigurator::GridZones(workArea, LayoutConfigurator::GridInfo(data).value(), 0);
+            const auto actual = LayoutConfigurator::GridZones(workArea, LayoutConfigurator::GridInfo(data, WorkArea1080()).value(), 0);
 
             Assert::AreEqual(expected.size(), actual.size());
             for (const auto& [id, zone] : expected)
@@ -318,7 +386,7 @@ namespace FancyZonesUnitTests
         {
             const FancyZonesUtils::Rect workArea{ RECT{ 0, 0, 1920, 1080 } };
             const auto expected = LayoutConfigurator::Columns(workArea, 3, 0);
-            const auto actual = LayoutConfigurator::GridZones(workArea, LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::Columns, 3)).value(), 0);
+            const auto actual = LayoutConfigurator::GridZones(workArea, LayoutConfigurator::GridInfo(Data(ZoneSetLayoutType::Columns, 3), WorkArea1080()).value(), 0);
 
             Assert::AreEqual(expected.size(), actual.size());
             for (const auto& [id, zone] : expected)

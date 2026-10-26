@@ -91,7 +91,7 @@ namespace FancyZonesUnitTests
 
         TEST_METHOD (InitFromGridUsesGivenPercentsAndSpacing)
         {
-            auto grid = LayoutConfigurator::GridInfo(m_data).value();
+            auto grid = LayoutConfigurator::GridInfo(m_data, FancyZonesUtils::Rect(RECT{ 0, 0, 1920, 1080 })).value();
             grid.columnsPercents()[0] = 6000;
             grid.columnsPercents()[1] = 4000;
 
@@ -111,7 +111,7 @@ namespace FancyZonesUnitTests
 
         TEST_METHOD (InitFromGridRejectsEmptyWorkArea)
         {
-            const auto grid = LayoutConfigurator::GridInfo(m_data).value();
+            const auto grid = LayoutConfigurator::GridInfo(m_data, FancyZonesUtils::Rect(RECT{ 0, 0, 1920, 1080 })).value();
             Assert::IsFalse(m_layout->InitFromGrid(FancyZonesUtils::Rect(RECT{ 0, 0, 0, 0 }), grid));
         }
 

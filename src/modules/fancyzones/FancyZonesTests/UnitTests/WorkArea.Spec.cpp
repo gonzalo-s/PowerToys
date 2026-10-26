@@ -592,7 +592,7 @@ namespace FancyZonesUnitTests
             m_workArea->FinishEdgeResize({ 0 }, RECT{ 0, 0, 962, 540 }, Right());
 
             Assert::AreEqual(960L, m_workArea->GetLayout()->Zones().at(0).GetZoneRect().right);
-            const auto base = LayoutConfigurator::GridInfo(AppliedLayouts::instance().GetDeviceLayout(m_workAreaId).value()).value();
+            const auto base = LayoutConfigurator::GridInfo(AppliedLayouts::instance().GetDeviceLayout(m_workAreaId).value(), m_workAreaRect).value();
             Assert::IsNull(WorkingLayouts::instance().Find(m_workAreaId, m_workArea->GetLayoutId(), base));
         }
 
@@ -601,7 +601,7 @@ namespace FancyZonesUnitTests
             m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 960, 540 }, Right(), nullptr);
             m_workArea->DiscardUnmodifiedWorkingLayout();
 
-            const auto base = LayoutConfigurator::GridInfo(AppliedLayouts::instance().GetDeviceLayout(m_workAreaId).value()).value();
+            const auto base = LayoutConfigurator::GridInfo(AppliedLayouts::instance().GetDeviceLayout(m_workAreaId).value(), m_workAreaRect).value();
             Assert::IsNull(WorkingLayouts::instance().Find(m_workAreaId, m_workArea->GetLayoutId(), base));
         }
 
@@ -610,7 +610,7 @@ namespace FancyZonesUnitTests
             m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 1160, 540 }, Right(), nullptr);
             m_workArea->DiscardUnmodifiedWorkingLayout();
 
-            const auto base = LayoutConfigurator::GridInfo(AppliedLayouts::instance().GetDeviceLayout(m_workAreaId).value()).value();
+            const auto base = LayoutConfigurator::GridInfo(AppliedLayouts::instance().GetDeviceLayout(m_workAreaId).value(), m_workAreaRect).value();
             Assert::IsNotNull(WorkingLayouts::instance().Find(m_workAreaId, m_workArea->GetLayoutId(), base));
             Assert::IsTrue(std::abs(m_workArea->GetLayout()->Zones().at(0).GetZoneRect().right - 1160L) <= 1);
         }
@@ -633,6 +633,51 @@ namespace FancyZonesUnitTests
             m_workArea = WorkArea::Create({}, m_workAreaId, {}, m_workAreaRect);
 
             Assert::IsTrue(std::abs(m_workArea->GetLayout()->Zones().at(0).GetZoneRect().right - 1160L) <= 1);
+        }
+
+        TEST_METHOD (ColumnsTemplateWithSpacingReturnsToTemplateGeometry)
+        {
+            LayoutData columns{
+                .uuid = GUID_NULL,
+                .type = FancyZonesDataTypes::ZoneSetLayoutType::Columns,
+                .showSpacing = true,
+                .spacing = 16,
+                .zoneCount = 3,
+                .sensitivityRadius = 20,
+            };
+            AppliedLayouts::instance().ApplyLayout(m_workAreaId, columns);
+            m_workArea->InitLayout();
+            Assert::IsTrue(m_workArea->SupportsEdgeResize());
+
+            const auto assertTemplate = [this]() {
+                const auto& zones = m_workArea->GetLayout()->Zones();
+                Assert::AreEqual(size_t{ 3 }, zones.size());
+                const std::vector<std::pair<long, long>> expected{ { 16, 634 }, { 650, 1269 }, { 1285, 1904 } };
+                ZoneIndex id = 0;
+                for (const auto& [left, right] : expected)
+                {
+                    const RECT r = zones.at(id++).GetZoneRect();
+                    Assert::AreEqual(left, r.left);
+                    Assert::AreEqual(right, r.right);
+                    Assert::AreEqual(16L, r.top);
+                    Assert::AreEqual(1064L, r.bottom);
+                }
+            };
+
+            // base zones are the template zones
+            assertTemplate();
+
+            // drag the right edge of zone 0 to x = 834
+            const auto result = m_workArea->ApplyEdgeResize({ 0 }, RECT{ 16, 16, 834, 1064 }, Right(), nullptr);
+            Assert::IsTrue(result.changed);
+            Assert::IsTrue(std::abs(m_workArea->GetLayout()->Zones().at(0).GetZoneRect().right - 834L) <= 1);
+
+            // release next to the original edge (634): within the snap radius, so the divider returns to base
+            m_workArea->FinishEdgeResize({ 0 }, RECT{ 16, 16, 636, 1064 }, Right());
+
+            assertTemplate();
+            const auto base = LayoutConfigurator::GridInfo(columns, m_workAreaRect).value();
+            Assert::IsNull(WorkingLayouts::instance().Find(m_workAreaId, m_workArea->GetLayoutId(), base));
         }
 
         TEST_METHOD (ChangingLayoutDiscardsWorkingLayout)

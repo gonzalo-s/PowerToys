@@ -404,9 +404,8 @@ void WorkArea::ShowResizeCue(HWND draggedWindow, bool atBase)
         .highlightOpacity = 0,
     };
 
-    const auto baseZones = LayoutConfigurator::GridZones(m_workAreaRect, *m_baseGrid, m_layout->Spacing());
     SetWorkAreaWindowAsTopmost(draggedWindow);
-    m_zonesOverlay->DrawActiveZoneSet(baseZones, {}, cue, false);
+    m_zonesOverlay->DrawActiveZoneSet(m_baseZones, {}, cue, false);
     m_zonesOverlay->Show();
 }
 
@@ -507,19 +506,21 @@ void WorkArea::CalculateZoneSet()
         }
     }
 
+    // Base (template) zones first: they are what the resize cue draws, independent of any working layout.
     m_layout = std::make_unique<Layout>(appliedLayout.value());
-    m_baseGrid = LayoutConfigurator::GridInfo(appliedLayout.value());
+    m_layout->Init(m_workAreaRect, m_uniqueId.monitorId.monitor);
+    m_baseZones = m_layout->Zones();
+    m_baseGrid = LayoutConfigurator::GridInfo(appliedLayout.value(), m_workAreaRect);
 
+    // A working (resized) layout for this work area overrides the template zones.
     if (m_baseGrid)
     {
         const auto* working = WorkingLayouts::instance().Find(m_uniqueId, m_layout->Id(), *m_baseGrid);
-        if (working && m_layout->InitFromGrid(m_workAreaRect, working->Current()))
+        if (working)
         {
-            return;
+            m_layout->InitFromGrid(m_workAreaRect, working->Current());
         }
     }
-
-    m_layout->Init(m_workAreaRect, m_uniqueId.monitorId.monitor);
 }
 
 LRESULT WorkArea::WndProc(UINT message, WPARAM wparam, LPARAM lparam) noexcept

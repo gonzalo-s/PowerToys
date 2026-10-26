@@ -116,6 +116,44 @@ namespace
         return info;
     }
 
+    // Track percents that make the grid formula (CalculateGridZones) reproduce the Columns/Rows template geometry
+    // along an axis of the given length. Template zone i spans [left_i, right_i] with left_0 = spacing,
+    // width_i = (i+1)*T/n - i*T/n, T = length - spacing*(n+1), left_{i+1} = right_i + spacing (see Columns/Rows).
+    // The boundary between zone i and i+1 is right_i + spacing/2, converted to units with rounding.
+    std::vector<int> TemplateTrackPercents(int zoneCount, long length, int spacing)
+    {
+        const size_t count = static_cast<size_t>(zoneCount);
+        std::vector<int> percents(count);
+        if (length <= 0)
+        {
+            // Degenerate work area: equal split, as for the plain template description.
+            for (int i = 0; i < zoneCount; i++)
+            {
+                percents[static_cast<size_t>(i)] = C_MULTIPLIER * (i + 1) / zoneCount - C_MULTIPLIER * i / zoneCount;
+            }
+            return percents;
+        }
+
+        const long long n = zoneCount;
+        const long long s = spacing;
+        const long long axis = length;
+        const long long total = axis - s * (n + 1);
+
+        long long left = s;
+        long long previousUnits = 0;
+        for (long long i = 0; i < n; i++)
+        {
+            const long long width = (i + 1) * total / n - i * total / n;
+            const long long right = left + width;
+            const long long units = (i == n - 1) ? C_MULTIPLIER : ((right + s / 2) * C_MULTIPLIER + axis / 2) / axis;
+            percents[static_cast<size_t>(i)] = static_cast<int>(units - previousUnits);
+            previousUnits = units;
+            left = right + s;
+        }
+
+        return percents;
+    }
+
     FancyZonesDataTypes::GridLayoutInfo GridInfoForZoneCount(int zoneCount)
     {
         int rows = 1, columns = 1;
@@ -473,14 +511,35 @@ ZonesMap LayoutConfigurator::GridZones(FancyZonesUtils::Rect workArea, const Fan
     return CalculateGridZones(workArea, info, spacing);
 }
 
-std::optional<FancyZonesDataTypes::GridLayoutInfo> LayoutConfigurator::GridInfo(const LayoutData& data) noexcept
+std::optional<FancyZonesDataTypes::GridLayoutInfo> LayoutConfigurator::GridInfo(const LayoutData& data, const FancyZonesUtils::Rect& workArea) noexcept
 {
+    // Same rule as Layout::Spacing / Layout::Init
+    const int spacing = data.showSpacing ? data.spacing : 0;
+
     switch (data.type)
     {
     case FancyZonesDataTypes::ZoneSetLayoutType::Columns:
-        return data.zoneCount > 0 ? std::optional(ColumnsInfo(data.zoneCount)) : std::nullopt;
+    {
+        if (data.zoneCount <= 0)
+        {
+            return std::nullopt;
+        }
+
+        auto info = ColumnsInfo(data.zoneCount);
+        info.columnsPercents() = TemplateTrackPercents(data.zoneCount, workArea.width(), spacing);
+        return info;
+    }
     case FancyZonesDataTypes::ZoneSetLayoutType::Rows:
-        return data.zoneCount > 0 ? std::optional(RowsInfo(data.zoneCount)) : std::nullopt;
+    {
+        if (data.zoneCount <= 0)
+        {
+            return std::nullopt;
+        }
+
+        auto info = RowsInfo(data.zoneCount);
+        info.rowsPercents() = TemplateTrackPercents(data.zoneCount, workArea.height(), spacing);
+        return info;
+    }
     case FancyZonesDataTypes::ZoneSetLayoutType::Grid:
         return data.zoneCount > 0 ? std::optional(GridInfoForZoneCount(data.zoneCount)) : std::nullopt;
     case FancyZonesDataTypes::ZoneSetLayoutType::PriorityGrid:

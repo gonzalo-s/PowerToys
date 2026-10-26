@@ -25,5 +25,9 @@ public:
 
     // Grid description of a grid-based layout (Columns, Rows, Grid, PriorityGrid, custom Grid).
     // nullopt for Blank, Focus and Canvas layouts.
-    static std::optional<FancyZonesDataTypes::GridLayoutInfo> GridInfo(const LayoutData& data) noexcept;
+    // For Columns/Rows the percents are derived from the template geometry on this work area (including spacing),
+    // so GridZones(workArea, info, spacing) reproduces the template zones within 1 px. The result therefore
+    // depends on the work-area size for these two types; WorkingLayouts::Find drops an entry whose base no longer
+    // matches (e.g. after a resolution/DPI change), which is accepted.
+    static std::optional<FancyZonesDataTypes::GridLayoutInfo> GridInfo(const LayoutData& data, const FancyZonesUtils::Rect& workArea) noexcept;
 };

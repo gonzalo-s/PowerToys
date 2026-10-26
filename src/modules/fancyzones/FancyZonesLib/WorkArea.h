@@ -92,6 +92,7 @@ private:
     HWND m_window{}; // Hidden tool window used to represent current monitor desktop work area.
     std::unique_ptr<Layout> m_layout;
     std::optional<FancyZonesDataTypes::GridLayoutInfo> m_baseGrid; // set when the applied layout is grid-based
+    ZonesMap m_baseZones; // template zones of the applied layout, before any working-layout override (drawn by the resize cue)
     LayoutAssignedWindows m_layoutWindows{};
     std::unique_ptr<ZonesOverlay> m_zonesOverlay;
 };
