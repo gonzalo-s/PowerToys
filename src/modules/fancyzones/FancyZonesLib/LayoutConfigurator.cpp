@@ -5,6 +5,7 @@
 #include <common/logger/logger.h>
 
 #include <FancyZonesLib/FancyZonesDataTypes.h>
+#include <FancyZonesLib/FancyZonesData/CustomLayouts.h>
 
 namespace
 {
@@ -90,6 +91,73 @@ namespace
             .columnsPercents = { 2500, 2500, 2500, 2500 },
             .cellChildMap = { { 0, 1, 2, 3 }, { 4, 1, 5, 6 }, { 7, 8, 9, 10 } } }),
     };
+
+    FancyZonesDataTypes::GridLayoutInfo ColumnsInfo(int zoneCount)
+    {
+        FancyZonesDataTypes::GridLayoutInfo info(FancyZonesDataTypes::GridLayoutInfo::Minimal{ .rows = 1, .columns = zoneCount });
+        info.rowsPercents()[0] = C_MULTIPLIER;
+        for (int col = 0; col < zoneCount; col++)
+        {
+            info.columnsPercents()[col] = C_MULTIPLIER * (col + 1) / zoneCount - C_MULTIPLIER * col / zoneCount;
+            info.cellChildMap()[0][col] = col;
+        }
+        return info;
+    }
+
+    FancyZonesDataTypes::GridLayoutInfo RowsInfo(int zoneCount)
+    {
+        FancyZonesDataTypes::GridLayoutInfo info(FancyZonesDataTypes::GridLayoutInfo::Minimal{ .rows = zoneCount, .columns = 1 });
+        info.columnsPercents()[0] = C_MULTIPLIER;
+        for (int row = 0; row < zoneCount; row++)
+        {
+            info.rowsPercents()[row] = C_MULTIPLIER * (row + 1) / zoneCount - C_MULTIPLIER * row / zoneCount;
+            info.cellChildMap()[row][0] = row;
+        }
+        return info;
+    }
+
+    FancyZonesDataTypes::GridLayoutInfo GridInfoForZoneCount(int zoneCount)
+    {
+        int rows = 1, columns = 1;
+        while (zoneCount / rows >= rows)
+        {
+            rows++;
+        }
+        rows--;
+        columns = zoneCount / rows;
+        if (zoneCount % rows != 0)
+        {
+            columns++;
+        }
+
+        FancyZonesDataTypes::GridLayoutInfo gridLayoutInfo(FancyZonesDataTypes::GridLayoutInfo::Minimal{ .rows = rows, .columns = columns });
+
+        // Note: The expressions below are NOT equal to C_MULTIPLIER / {rows|columns} and are done
+        // like this to make the sum of all percents exactly C_MULTIPLIER
+        for (int row = 0; row < rows; row++)
+        {
+            gridLayoutInfo.rowsPercents()[row] = C_MULTIPLIER * (row + 1) / rows - C_MULTIPLIER * row / rows;
+        }
+        for (int col = 0; col < columns; col++)
+        {
+            gridLayoutInfo.columnsPercents()[col] = C_MULTIPLIER * (col + 1) / columns - C_MULTIPLIER * col / columns;
+        }
+
+        int index = 0;
+        for (int row = 0; row < rows; row++)
+        {
+            for (int col = 0; col < columns; col++)
+            {
+                gridLayoutInfo.cellChildMap()[row][col] = index++;
+                if (index == zoneCount)
+                {
+                    index--;
+                }
+            }
+        }
+
+        return gridLayoutInfo;
+    }
 }
 
 bool AddZone(Zone zone, ZonesMap& zones) noexcept
@@ -331,54 +399,7 @@ ZonesMap LayoutConfigurator::Grid(FancyZonesUtils::Rect workArea, int zoneCount,
         return {};
     }
 
-    int rows = 1, columns = 1;
-    while (zoneCount / rows >= rows)
-    {
-        rows++;
-    }
-    rows--;
-    columns = zoneCount / rows;
-    if (zoneCount % rows == 0)
-    {
-        // even grid
-    }
-    else
-    {
-        columns++;
-    }
-
-    FancyZonesDataTypes::GridLayoutInfo gridLayoutInfo(FancyZonesDataTypes::GridLayoutInfo::Minimal{ .rows = rows, .columns = columns });
-
-    // Note: The expressions below are NOT equal to C_MULTIPLIER / {rows|columns} and are done
-    // like this to make the sum of all percents exactly C_MULTIPLIER
-    for (int row = 0; row < rows; row++)
-    {
-        gridLayoutInfo.rowsPercents()[row] = C_MULTIPLIER * (row + 1) / rows - C_MULTIPLIER * row / rows;
-    }
-    for (int col = 0; col < columns; col++)
-    {
-        gridLayoutInfo.columnsPercents()[col] = C_MULTIPLIER * (col + 1) / columns - C_MULTIPLIER * col / columns;
-    }
-
-    for (int i = 0; i < rows; ++i)
-    {
-        gridLayoutInfo.cellChildMap()[i] = std::vector<int>(columns);
-    }
-
-    int index = 0;
-    for (int row = 0; row < rows; row++)
-    {
-        for (int col = 0; col < columns; col++)
-        {
-            gridLayoutInfo.cellChildMap()[row][col] = index++;
-            if (index == zoneCount)
-            {
-                index--;
-            }
-        }
-    }
-
-    return CalculateGridZones(workArea, gridLayoutInfo, spacing);
+    return CalculateGridZones(workArea, GridInfoForZoneCount(zoneCount), spacing);
 }
 
 ZonesMap LayoutConfigurator::PriorityGrid(FancyZonesUtils::Rect workArea, int zoneCount, int spacing) noexcept
@@ -445,4 +466,52 @@ ZonesMap LayoutConfigurator::Custom(FancyZonesUtils::Rect workArea, HMONITOR mon
     }
 
     return {};
+}
+
+ZonesMap LayoutConfigurator::GridZones(FancyZonesUtils::Rect workArea, const FancyZonesDataTypes::GridLayoutInfo& info, int spacing) noexcept
+{
+    return CalculateGridZones(workArea, info, spacing);
+}
+
+std::optional<FancyZonesDataTypes::GridLayoutInfo> LayoutConfigurator::GridInfo(const LayoutData& data) noexcept
+{
+    switch (data.type)
+    {
+    case FancyZonesDataTypes::ZoneSetLayoutType::Columns:
+        return data.zoneCount > 0 ? std::optional(ColumnsInfo(data.zoneCount)) : std::nullopt;
+    case FancyZonesDataTypes::ZoneSetLayoutType::Rows:
+        return data.zoneCount > 0 ? std::optional(RowsInfo(data.zoneCount)) : std::nullopt;
+    case FancyZonesDataTypes::ZoneSetLayoutType::Grid:
+        return data.zoneCount > 0 ? std::optional(GridInfoForZoneCount(data.zoneCount)) : std::nullopt;
+    case FancyZonesDataTypes::ZoneSetLayoutType::PriorityGrid:
+    {
+        if (data.zoneCount <= 0)
+        {
+            return std::nullopt;
+        }
+
+        // Same rule as LayoutConfigurator::PriorityGrid
+        constexpr int predefinedLayoutsCount = sizeof(predefinedPriorityGridLayouts) / sizeof(FancyZonesDataTypes::GridLayoutInfo);
+        if (data.zoneCount < predefinedLayoutsCount)
+        {
+            return predefinedPriorityGridLayouts[data.zoneCount - 1];
+        }
+
+        return GridInfoForZoneCount(data.zoneCount);
+    }
+    case FancyZonesDataTypes::ZoneSetLayoutType::Custom:
+    {
+        const auto custom = CustomLayouts::instance().GetCustomLayoutData(data.uuid);
+        if (custom.has_value() &&
+            custom->type == FancyZonesDataTypes::CustomLayoutType::Grid &&
+            std::holds_alternative<FancyZonesDataTypes::GridLayoutInfo>(custom->info))
+        {
+            return std::get<FancyZonesDataTypes::GridLayoutInfo>(custom->info);
+        }
+
+        return std::nullopt;
+    }
+    default:
+        return std::nullopt;
+    }
 }
