@@ -548,6 +548,20 @@ namespace FancyZonesUnitTests
             return FancyZonesZoneRects::RectsFromGrid(LayoutConfigurator::GridInfo(AppliedLayouts::instance().GetDeviceLayout(m_workAreaId).value(), m_workAreaRect).value());
         }
 
+        void ApplyTemplate(FancyZonesDataTypes::ZoneSetLayoutType type, int zoneCount, int spacing)
+        {
+            LayoutData layout{
+                .uuid = GUID_NULL,
+                .type = type,
+                .showSpacing = spacing > 0,
+                .spacing = spacing,
+                .zoneCount = zoneCount,
+                .sensitivityRadius = 20,
+            };
+            AppliedLayouts::instance().ApplyLayout(m_workAreaId, layout);
+            m_workArea->InitLayout();
+        }
+
     public:
         TEST_METHOD (GridLayoutSupportsEdgeResize)
         {
@@ -916,7 +930,100 @@ namespace FancyZonesUnitTests
             // 960 + 21 = 981 -> ceil(9810000 / 1920) = 5110 units, |110| > 104: stays at floor(5110 * 1920 / 10000) = 981
             result = m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 981, 540 }, Right(), nullptr);
             Assert::IsFalse(result.atBase);
+            Assert::IsFalse(result.snapped);
+            Assert::IsTrue(result.snaps.empty());
             Assert::AreEqual(981L, m_workArea->GetActiveZones().at(0).GetZoneRect().right);
+        }
+
+        TEST_METHOD (SnapsToAnotherOriginalGridline)
+        {
+            // Grid with 5 zones: column percents 3333 | 3333 | 3334 (10000 * k / 3 boundaries), zones 0 1 2 / 3 4 4.
+            // Vertical gridlines at 3333 units (floor(1920 * 3333 / 10000) = floor(639.94) = 639 px) and 6666 units
+            // (floor(1279.87) = 1279 px, top row only).
+            ApplyTemplate(FancyZonesDataTypes::ZoneSetLayoutType::Grid, 5, 0);
+            Assert::AreEqual(1279L, m_workArea->GetLayout()->Zones().at(1).GetZoneRect().right);
+            Assert::AreEqual(639L, m_workArea->GetLayout()->Zones().at(3).GetZoneRect().right);
+
+            // zone 3's right edge to 1270 px: ceil(12700000 / 1920) = 6615 units, |6615 - 6666| = 51 <= 104: snaps to
+            // the top row's gridline, exactly 1279 px
+            auto result = m_workArea->ApplyEdgeResize({ 3 }, RECT{ 0, 540, 1270, 1080 }, Right(), nullptr);
+            Assert::IsTrue(result.changed);
+            Assert::IsTrue(result.snapped);
+            Assert::IsFalse(result.snappedOwnLine);
+            Assert::IsFalse(result.atBase);
+            Assert::IsTrue(result.snaps == std::vector<FancyZonesZoneRects::EdgeSnap>{ { true, 6666, false } });
+            Assert::AreEqual(1279L, m_workArea->GetActiveZones().at(3).GetZoneRect().right);
+            Assert::AreEqual(1279L, m_workArea->GetActiveZones().at(4).GetZoneRect().left);
+
+            // 1240 px: ceil(12400000 / 1920) = 6459 units, 207 away from 6666: no snap, floor(1240.128) = 1240 px
+            result = m_workArea->ApplyEdgeResize({ 3 }, RECT{ 0, 540, 1240, 1080 }, Right(), nullptr);
+            Assert::IsFalse(result.snapped);
+            Assert::IsTrue(result.snaps.empty());
+            Assert::AreEqual(1240L, m_workArea->GetActiveZones().at(3).GetZoneRect().right);
+
+            // released at 1290 px: ceil(12900000 / 1920) = 6719 units, 53 away: the edge lands exactly on 1279 px
+            m_workArea->FinishEdgeResize({ 3 }, RECT{ 0, 540, 1290, 1080 }, Right());
+            Assert::AreEqual(1279L, m_workArea->GetActiveZones().at(3).GetZoneRect().right);
+            Assert::AreEqual(1279L, m_workArea->GetActiveZones().at(4).GetZoneRect().left);
+            Assert::IsNotNull(WorkingLayouts::instance().Find(m_workAreaId, m_workArea->GetLayoutId(), BaseRects()));
+        }
+
+        TEST_METHOD (SnapsToOwnGridlineReportsOwnLine)
+        {
+            ApplyTemplate(FancyZonesDataTypes::ZoneSetLayoutType::Grid, 5, 0);
+            m_workArea->ApplyEdgeResize({ 3 }, RECT{ 0, 540, 1000, 1080 }, Right(), nullptr);
+
+            // 650 px: ceil(6500000 / 1920) = 3386 units, |3386 - 3333| = 53 <= 104: back on its own line (639 px)
+            const auto result = m_workArea->ApplyEdgeResize({ 3 }, RECT{ 0, 540, 650, 1080 }, Right(), nullptr);
+            Assert::IsTrue(result.snapped);
+            Assert::IsTrue(result.snappedOwnLine);
+            Assert::IsTrue(result.atBase);
+            Assert::IsTrue(result.snaps == std::vector<FancyZonesZoneRects::EdgeSnap>{ { true, 3333, true } });
+            Assert::AreEqual(639L, m_workArea->GetActiveZones().at(3).GetZoneRect().right);
+        }
+
+        TEST_METHOD (ResizeGuideLinesInPixels)
+        {
+            // PriorityGrid with 5 zones: columns 2500 | 5000 | 2500, zones 0 1 2 / 3 1 4 (zone 1 spans both rows)
+            ApplyTemplate(FancyZonesDataTypes::ZoneSetLayoutType::PriorityGrid, 5, 0);
+            const auto base = BaseRects();
+
+            // 1920 x 1080: x = 1920 * 2500 / 10000 = 480, 1920 * 7500 / 10000 = 1440, y = 1080 * 5000 / 10000 = 540;
+            // the horizontal line is interrupted by zone 1
+            const std::vector<ResizeGuideLine> fullHd{
+                { true, 2500, 480, 0, 1080 },
+                { true, 7500, 1440, 0, 1080 },
+                { false, 5000, 540, 0, 480 },
+                { false, 5000, 540, 1440, 1920 },
+            };
+            Assert::IsTrue(WorkArea::ResizeGuideLines(base, 1920, 1080) == fullHd);
+
+            // 1366 x 768: floor(341.5) = 341, floor(1024.5) = 1024, 384
+            const std::vector<ResizeGuideLine> hdReady{
+                { true, 2500, 341, 0, 768 },
+                { true, 7500, 1024, 0, 768 },
+                { false, 5000, 384, 0, 341 },
+                { false, 5000, 384, 1024, 1366 },
+            };
+            Assert::IsTrue(WorkArea::ResizeGuideLines(base, 1366, 768) == hdReady);
+
+            // spacing 0: the lines are the zone edges
+            const auto& zones = m_workArea->GetLayout()->Zones();
+            Assert::AreEqual(480L, zones.at(0).GetZoneRect().right);
+            Assert::AreEqual(480L, zones.at(1).GetZoneRect().left);
+            Assert::AreEqual(1440L, zones.at(1).GetZoneRect().right);
+            Assert::AreEqual(540L, zones.at(0).GetZoneRect().bottom);
+
+            // spacing 16: same lines (the base rects do not depend on spacing), now the centre of the 16 px gap
+            ApplyTemplate(FancyZonesDataTypes::ZoneSetLayoutType::PriorityGrid, 5, 16);
+            Assert::IsTrue(WorkArea::ResizeGuideLines(BaseRects(), 1920, 1080) == fullHd);
+            const auto& spaced = m_workArea->GetLayout()->Zones();
+            Assert::AreEqual(472L, spaced.at(0).GetZoneRect().right);
+            Assert::AreEqual(488L, spaced.at(1).GetZoneRect().left);
+            Assert::AreEqual(1432L, spaced.at(1).GetZoneRect().right);
+            Assert::AreEqual(1448L, spaced.at(2).GetZoneRect().left);
+            Assert::AreEqual(532L, spaced.at(0).GetZoneRect().bottom);
+            Assert::AreEqual(548L, spaced.at(3).GetZoneRect().top);
         }
 
         TEST_METHOD (ReleasedEdgeNeedsPlacementOnlyWhenADraggedEdgeDiffers)

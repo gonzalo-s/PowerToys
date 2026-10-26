@@ -53,7 +53,7 @@ void WindowResizeHandler::Reset() noexcept
     m_lastFrame = {};
     m_moved = {};
     m_lastUpdateTick = 0;
-    m_cueAtBase = true;
+    m_cueSnaps.clear();
     m_cueShown = false;
     m_workAreaId = {};
     m_layoutId = GUID_NULL;
@@ -144,11 +144,13 @@ void WindowResizeHandler::Update()
     m_lastFrame = frame;
     m_lastUpdateTick = now;
 
-    if (result.dividerDragged && (!m_cueShown || result.atBase != m_cueAtBase))
+    // Redraw the cue when it appears and whenever the highlighted line changes (snapped on/off, another line,
+    // own/other line); the 16 ms throttle above still applies.
+    if (result.dividerDragged && (!m_cueShown || result.snaps != m_cueSnaps))
     {
         m_cueShown = true;
-        m_cueAtBase = result.atBase;
-        workArea->ShowResizeCue(m_window, m_cueAtBase);
+        m_cueSnaps = result.snaps;
+        workArea->ShowResizeCue(m_window, m_cueSnaps);
     }
 }
 

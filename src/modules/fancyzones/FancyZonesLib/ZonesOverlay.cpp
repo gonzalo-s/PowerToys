@@ -770,6 +770,36 @@ void ZonesOverlay::DrawActiveZoneSet(const ZonesMap& zones,
     }
 }
 
+void ZonesOverlay::DrawGuideLines(const std::vector<GuideLine>& lines)
+{
+    std::unique_lock lock(m_mutex);
+
+    m_sceneRects = {};
+    m_drawBackdrop = false;
+    m_rotationDirection = RotationDirection::None;
+    m_animateRotation = false;
+    m_monitorNumber.reset();
+    m_rotationPulseStart.reset();
+
+    // A zero-width (or zero-height) rectangle through the pixel centres: Render strokes its border 1 px wide, which
+    // covers exactly the pixel column (row) position; the fill is fully transparent.
+    const auto transparent = D2D1::ColorF(0.f, 0.f, 0.f, 0.f);
+    for (const auto& line : lines)
+    {
+        const float position = static_cast<float>(line.position) + 0.5f;
+        const float start = static_cast<float>(line.start) + 0.5f;
+        const float end = static_cast<float>(line.end) - 0.5f;
+        m_sceneRects.push_back(DrawableRect{
+            .rect = line.vertical ? D2D1::RectF(position, start, position, end) : D2D1::RectF(start, position, end, position),
+            .borderColor = ConvertColor(line.color),
+            .fillColor = transparent,
+            .textColor = transparent,
+            .id = 0,
+            .showText = false,
+        });
+    }
+}
+
 void ZonesOverlay::DrawMonitorRotationPreview(const std::vector<RECT>& windowRects, size_t monitorNumber, std::optional<bool> reverse, bool animateRotation)
 {
     std::unique_lock lock(m_mutex);

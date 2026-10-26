@@ -74,6 +74,16 @@ namespace FancyZonesZoneRects
         bool ownBaseLine = false; // that gridline is the dragged block's own base side position
     };
 
+    // An original gridline a dragged side is snapped to (magnet), as reported to the resize cue.
+    struct EdgeSnap
+    {
+        bool vertical; // vertical gridline (a Left/Right side snapped): position is an x coordinate
+        int position; // units
+        bool ownLine; // the dragged side's own original line
+
+        bool operator==(const EdgeSnap& other) const noexcept = default;
+    };
+
     // Distinct inner coordinates of the rectangles' sides on one axis (x for vertical lines, y for horizontal lines),
     // sorted ascending; 0 and TotalUnits (work-area borders) are excluded. These are the original gridlines.
     std::vector<int> InnerCoordinates(const UnitRects& rects, bool vertical);

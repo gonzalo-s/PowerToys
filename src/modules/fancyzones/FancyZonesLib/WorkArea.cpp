@@ -495,9 +495,16 @@ EdgeResizeResult WorkArea::ApplyEdgeResizeInternal(const ZoneIndexSet& zones, co
         const int position = static_cast<int>(CeilDiv(static_cast<long long>(dragged.edge) * TotalUnits, dragged.length));
         const int minSize = static_cast<int>(static_cast<long long>(MinSizePx) * TotalUnits / dragged.length);
         const int snapRadius = static_cast<int>(static_cast<long long>(SnapRadiusPx) * TotalUnits / dragged.length);
-        if (model.MoveEdge(zones, dragged.side, position, minSize, snapRadius).result == MoveResult::Moved)
+        const auto outcome = model.MoveEdge(zones, dragged.side, position, minSize, snapRadius);
+        if (outcome.result == MoveResult::Moved)
         {
             result.changed = true;
+        }
+
+        if (outcome.snapped)
+        {
+            const bool vertical = dragged.side == Side::Left || dragged.side == Side::Right;
+            result.snaps.push_back(EdgeSnap{ vertical, outcome.snappedPosition, outcome.ownBaseLine });
         }
 
         // The dragged block's side is back where it is in the base layout.
@@ -522,6 +529,7 @@ EdgeResizeResult WorkArea::ApplyEdgeResizeInternal(const ZoneIndexSet& zones, co
             Logger::error(L"Working layout produced invalid zones, resetting to the base layout");
             RemoveWorkingLayout();
             result.atBase = true;
+            result.snaps.clear();
         }
 
         if (reposition)
@@ -530,6 +538,8 @@ EdgeResizeResult WorkArea::ApplyEdgeResizeInternal(const ZoneIndexSet& zones, co
         }
     }
 
+    result.snapped = !result.snaps.empty();
+    result.snappedOwnLine = result.snapped && std::all_of(result.snaps.begin(), result.snaps.end(), [](const EdgeSnap& snap) { return snap.ownLine; });
     return result;
 }
 
@@ -540,6 +550,12 @@ void WorkArea::FinishEdgeResize(const ZoneIndexSet& zones, const RECT& finalFram
         return;
     }
 
+    // Release rule: every dragged inner edge ends either exactly where the user released it, or exactly on an
+    // original gridline (magnet: the nearest one within SnapRadiusPx, any line on that axis), or at a clamp limit
+    // (MinSizePx for the zones on both sides of the wall, never below a zone's current/base size). finalFrame is the
+    // frame read at MOVESIZEEND, not the last (throttled) live frame, so the snap and the clamp are decided on the
+    // release position itself. With spacing, "on a gridline" means the zone boundary is the gridline (the centre of
+    // the gap drawn by the cue): the window edge is spacing / 2 away from it, exactly like the template zones.
     // Single pass: update the model without moving windows, drop an unmodified entry, then move only the windows
     // whose zones changed during this pass.
     const ZonesMap previousZones = ActiveZones();
@@ -654,24 +670,67 @@ void WorkArea::RemoveWorkingLayout()
     m_workingZones.clear();
 }
 
-void WorkArea::ShowResizeCue(HWND draggedWindow, bool atBase)
+std::vector<ResizeGuideLine> WorkArea::ResizeGuideLines(const FancyZonesZoneRects::UnitRects& base, long width, long height)
+{
+    using FancyZonesZoneRects::TotalUnits;
+
+    // floor(length * units / TotalUnits) for units in [0, TotalUnits]: the pixel maths of Layout::ZonesFromRects and
+    // CalculateGridZones, so a line is exactly where the base zones put the boundary.
+    const auto toPixels = [](long length, int units) {
+        return static_cast<long>(static_cast<long long>(length) * units / TotalUnits);
+    };
+
+    std::vector<ResizeGuideLine> lines;
+    for (const auto& line : FancyZonesZoneRects::InnerGridLines(base))
+    {
+        const long across = line.vertical ? width : height; // axis of the position
+        const long along = line.vertical ? height : width; // axis of the segment
+        lines.push_back(ResizeGuideLine{
+            .vertical = line.vertical,
+            .unitPosition = line.position,
+            .position = toPixels(across, line.position),
+            .start = toPixels(along, line.start),
+            .end = toPixels(along, line.end),
+        });
+    }
+
+    return lines;
+}
+
+void WorkArea::ShowResizeCue(HWND draggedWindow, const std::vector<FancyZonesZoneRects::EdgeSnap>& snaps)
 {
     if (!m_layout || !m_baseRects || !m_zonesOverlay)
     {
         return;
     }
 
-    // Only the zone borders are drawn (fill opacity 0): the outlines of the base layout are its gridlines.
-    const Colors::ZoneColors cue{
-        .primaryColor = 0,
-        .borderColor = atBase ? RGB(102, 204, 102) : RGB(90, 160, 255),
-        .highlightColor = 0,
-        .numberColor = 0,
-        .highlightOpacity = 0,
-    };
+    constexpr COLORREF gridlineColor = RGB(90, 160, 255); // blue: original gridline
+    constexpr COLORREF ownLineColor = RGB(102, 204, 102); // green: snapped to the dragged edge's own original line
+    constexpr COLORREF otherLineColor = RGB(255, 255, 255); // white: snapped to another original line
+
+    // Plain lines first, highlighted lines on top (they cross the plain ones).
+    std::vector<ZonesOverlay::GuideLine> plain;
+    std::vector<ZonesOverlay::GuideLine> highlighted;
+    for (const auto& line : ResizeGuideLines(*m_baseRects, m_workAreaRect.width(), m_workAreaRect.height()))
+    {
+        const auto snap = std::find_if(snaps.begin(), snaps.end(), [&line](const FancyZonesZoneRects::EdgeSnap& s) {
+            return s.vertical == line.vertical && s.position == line.unitPosition;
+        });
+
+        const ZonesOverlay::GuideLine guide{
+            .vertical = line.vertical,
+            .position = line.position,
+            .start = line.start,
+            .end = line.end,
+            .color = snap == snaps.end() ? gridlineColor : (snap->ownLine ? ownLineColor : otherLineColor),
+        };
+        (snap == snaps.end() ? plain : highlighted).push_back(guide);
+    }
+
+    plain.insert(plain.end(), highlighted.begin(), highlighted.end());
 
     SetWorkAreaWindowAsTopmost(draggedWindow);
-    m_zonesOverlay->DrawActiveZoneSet(m_baseZones, {}, cue, false);
+    m_zonesOverlay->DrawGuideLines(plain);
     m_zonesOverlay->Show();
 }
 

@@ -28,7 +28,8 @@ public:
     bool Begin(HWND window);
 
     // LOCATIONCHANGE. Cheap no-op when nothing is tracked, the frame did not change, or it is too soon after the last update.
-    // Shows the base-gridline cue the first time a divider edge is dragged, then toggles its colour (at base / moved).
+    // Shows the original-gridline cue the first time a divider edge is dragged, then redraws it whenever the gridline
+    // the dragged edge is snapped to changes (green: its own original line, white: another original line).
     void Update();
 
     // MOVESIZEEND. Final pass using the window's actual frame. The dragged window is placed into its zones only when
@@ -55,7 +56,7 @@ private:
     RECT m_lastFrame{};
     FancyZonesZoneRects::MovedEdges m_moved;
     ULONGLONG m_lastUpdateTick{};
-    bool m_cueAtBase = true;
+    std::vector<FancyZonesZoneRects::EdgeSnap> m_cueSnaps; // highlighted gridlines of the cue as last drawn
     bool m_cueShown = false; // the cue is shown only once a divider edge is dragged
     FancyZonesDataTypes::WorkAreaId m_workAreaId{}; // work area the drag started on
     GUID m_layoutId{}; // layout applied on that work area when the drag started

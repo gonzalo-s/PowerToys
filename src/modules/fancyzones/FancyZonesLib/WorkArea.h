@@ -15,6 +15,21 @@ struct EdgeResizeResult
     bool atBase = true; // every inner side of the dragged block touched by this resize is at its base position
     bool dividerDragged = false; // at least one moved edge is an inner edge (it has a neighbouring zone)
     bool outerEdgeMoved = false; // a moved edge lies on the work-area border: it stays where the user put it
+    bool snapped = false; // at least one dragged inner side ended exactly on an original gridline (magnet)
+    bool snappedOwnLine = false; // snapped, and every snapped side is on its own original line
+    std::vector<FancyZonesZoneRects::EdgeSnap> snaps; // the gridlines the dragged sides are snapped to (for the cue)
+};
+
+// One original gridline segment of the resize cue, in pixels relative to the work-area origin.
+struct ResizeGuideLine
+{
+    bool vertical; // vertical line: position is an x coordinate, start/end are y coordinates
+    int unitPosition; // the gridline in units (matches FancyZonesZoneRects::EdgeSnap::position)
+    long position;
+    long start;
+    long end;
+
+    bool operator==(const ResizeGuideLine& other) const noexcept = default;
 };
 
 class WorkArea
@@ -70,7 +85,15 @@ public:
     EdgeResizeResult ApplyEdgeResize(const ZoneIndexSet& zones, const RECT& currentFrame, const FancyZonesZoneRects::MovedEdges& moved, HWND skipWindow);
     void FinishEdgeResize(const ZoneIndexSet& zones, const RECT& finalFrame, const FancyZonesZoneRects::MovedEdges& moved, HWND draggedWindow = nullptr);
     void DiscardUnmodifiedWorkingLayout();
-    void ShowResizeCue(HWND draggedWindow, bool atBase);
+
+    // Resize cue: every original gridline (blue, 1 px); the line a dragged side is snapped to is green when it is the
+    // side's own original line and white when it is another original line.
+    void ShowResizeCue(HWND draggedWindow, const std::vector<FancyZonesZoneRects::EdgeSnap>& snaps);
+
+    // Original gridline segments of the base rects in pixels (work area width x height). A line lies on the boundary
+    // pixel floor(length * units / TotalUnits), the same maths as the zones: without spacing it is the zone edge, with
+    // spacing it is the centre of the gap (the zones end spacing / 2 before and start spacing / 2 after it).
+    static std::vector<ResizeGuideLine> ResizeGuideLines(const FancyZonesZoneRects::UnitRects& base, long width, long height);
 
     // Zones that position the snapped windows: the working (resized) zones when a working layout exists, otherwise
     // the layout's zones. GetLayout() always keeps the original layout (overlay, drop targets, keyboard snapping).
@@ -124,7 +147,7 @@ private:
     HWND m_window{}; // Hidden tool window used to represent current monitor desktop work area.
     std::unique_ptr<Layout> m_layout; // always the applied (original) layout
     std::optional<FancyZonesZoneRects::UnitRects> m_baseRects; // zone rectangles of the applied layout, set when it is grid-based
-    ZonesMap m_baseZones; // template zones of the applied layout (drawn by the resize cue)
+    ZonesMap m_baseZones; // template zones of the applied layout (fallback of ActiveZones without a layout)
     ZonesMap m_workingZones; // zones of the working (resized) layout that position the windows; empty = none
     LayoutAssignedWindows m_layoutWindows{};
     std::unique_ptr<ZonesOverlay> m_zonesOverlay;

@@ -100,6 +100,17 @@ public:
         LayoutNameLabelPlacement placement;
     };
 
+    // A 1 px line in client coordinates: vertical lines cover the pixel column position from start to end, horizontal
+    // lines the pixel row position.
+    struct GuideLine
+    {
+        bool vertical;
+        long position;
+        long start;
+        long end;
+        COLORREF color;
+    };
+
     ~ZonesOverlay();
     ZonesOverlay(HWND window);
     void Hide();
@@ -109,6 +120,8 @@ public:
                            const ZoneIndexSet& highlightZones,
                            const Colors::ZoneColors& colors,
                            const bool showZoneText);
+    // Replaces the scene with the given lines (drawn in order, later lines on top); no fill, no text.
+    void DrawGuideLines(const std::vector<GuideLine>& lines);
     void ShowLayoutName(const std::wstring& text, const LayoutNameLabelOptions& options);
     void DrawMonitorRotationPreview(const std::vector<RECT>& windowRects, size_t monitorNumber, std::optional<bool> reverse, bool animateRotation);
 };
