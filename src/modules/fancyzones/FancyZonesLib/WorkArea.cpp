@@ -120,6 +120,60 @@ namespace
     }
 }
 
+// Diagnostics text for the edge-resize log lines (no window titles: HWND values and rectangles only).
+std::string EdgeResizeLogText::Rect(const RECT& rect)
+{
+    return "(" + std::to_string(rect.left) + "," + std::to_string(rect.top) + "," + std::to_string(rect.right) + "," + std::to_string(rect.bottom) + ")";
+}
+
+std::string EdgeResizeLogText::Zones(const ZoneIndexSet& zones)
+{
+    std::string text = "{";
+    for (const ZoneIndex id : zones)
+    {
+        text += (text.size() > 1 ? "," : "") + std::to_string(id);
+    }
+
+    return text + "}";
+}
+
+std::string EdgeResizeLogText::Moved(const FancyZonesZoneRects::MovedEdges& moved)
+{
+    std::string text;
+    text += moved.left ? "L" : "";
+    text += moved.top ? "T" : "";
+    text += moved.right ? "R" : "";
+    text += moved.bottom ? "B" : "";
+    return text.empty() ? "-" : text;
+}
+
+std::string EdgeResizeLogText::Sides(const std::vector<EdgeResizeSide>& sides)
+{
+    using FancyZonesZoneRects::Side;
+    std::string text;
+    for (const auto& side : sides)
+    {
+        const char* name = side.side == Side::Left ? "left" : side.side == Side::Top ? "top" : side.side == Side::Right ? "right" : "bottom";
+        text += std::string(text.empty() ? "" : "; ") + name + " requested " + std::to_string(side.requested) + " final " + std::to_string(side.final) +
+                (side.snapped ? " snapped" : "") + (side.clamped ? " clamped" : "");
+    }
+
+    return text.empty() ? "-" : text;
+}
+
+namespace
+{
+    std::string UnitBoundsText(const std::optional<FancyZonesZoneRects::UnitRect>& rect)
+    {
+        if (!rect)
+        {
+            return "base";
+        }
+
+        return "[" + std::to_string(rect->left) + "," + std::to_string(rect->top) + "," + std::to_string(rect->right) + "," + std::to_string(rect->bottom) + "]";
+    }
+}
+
 WorkArea::WorkArea(HINSTANCE hinstance, const FancyZonesDataTypes::WorkAreaId& uniqueId, const FancyZonesUtils::Rect& workAreaRect) :
     m_uniqueId(uniqueId),
     m_workAreaRect(workAreaRect)
@@ -408,6 +462,7 @@ EdgeResizeResult WorkArea::ApplyEdgeResizeInternal(const ZoneIndexSet& zones, co
     using namespace FancyZonesZoneRects;
 
     EdgeResizeResult result;
+    result.clampedFrame = currentFrame;
     if (!m_layout || !m_baseRects)
     {
         return result;
@@ -421,6 +476,8 @@ EdgeResizeResult WorkArea::ApplyEdgeResizeInternal(const ZoneIndexSet& zones, co
         bool moved;
         long edge; // boundary relative to the work-area origin, in pixels
         long length; // work-area length on the side's axis
+        long frameEdge; // the window edge (screen)
+        long toFrame; // boundary (relative) -> window edge: + origin -/+ half spacing
     };
 
     const int halfSpacing = m_layout->Spacing() / 2;
@@ -429,10 +486,10 @@ EdgeResizeResult WorkArea::ApplyEdgeResizeInternal(const ZoneIndexSet& zones, co
     const long width = m_workAreaRect.width();
     const long height = m_workAreaRect.height();
     const std::array<DraggedSide, 4> sides{ {
-        { Side::Left, moved.left, currentFrame.left - halfSpacing - left, width },
-        { Side::Right, moved.right, currentFrame.right + halfSpacing - left, width },
-        { Side::Top, moved.top, currentFrame.top - halfSpacing - top, height },
-        { Side::Bottom, moved.bottom, currentFrame.bottom + halfSpacing - top, height },
+        { Side::Left, moved.left, currentFrame.left - halfSpacing - left, width, currentFrame.left, left + halfSpacing },
+        { Side::Right, moved.right, currentFrame.right + halfSpacing - left, width, currentFrame.right, left - halfSpacing },
+        { Side::Top, moved.top, currentFrame.top - halfSpacing - top, height, currentFrame.top, top + halfSpacing },
+        { Side::Bottom, moved.bottom, currentFrame.bottom + halfSpacing - top, height, currentFrame.bottom, top - halfSpacing },
     } };
 
     // Classify the moved sides first, without creating a working layout entry: an edge on the work-area border is
@@ -510,6 +567,29 @@ EdgeResizeResult WorkArea::ApplyEdgeResizeInternal(const ZoneIndexSet& zones, co
             result.snaps.push_back(EdgeSnap{ vertical, outcome.snappedPosition, outcome.ownBaseLine });
         }
 
+        // Where the side ended, as a window edge (the same floor maths as Layout::ZonesFromRects).
+        const long finalEdge = static_cast<long>(static_cast<long long>(dragged.length) * outcome.position / TotalUnits) + dragged.toFrame;
+        result.sides.push_back(EdgeResizeSide{ dragged.side, dragged.frameEdge, finalEdge, outcome.snapped, outcome.clamped });
+        if (outcome.clamped)
+        {
+            result.clamped = true;
+            switch (dragged.side)
+            {
+            case Side::Left:
+                result.clampedFrame.left = finalEdge;
+                break;
+            case Side::Top:
+                result.clampedFrame.top = finalEdge;
+                break;
+            case Side::Right:
+                result.clampedFrame.right = finalEdge;
+                break;
+            default:
+                result.clampedFrame.bottom = finalEdge;
+                break;
+            }
+        }
+
         // The dragged block's side is back where it is in the base layout.
         const auto bounds = model.BoundsOf(zones);
         const auto baseBounds = model.BaseBoundsOf(zones);
@@ -533,6 +613,8 @@ EdgeResizeResult WorkArea::ApplyEdgeResizeInternal(const ZoneIndexSet& zones, co
             RemoveWorkingLayout();
             result.atBase = true;
             result.snaps.clear();
+            result.clamped = false;
+            result.clampedFrame = currentFrame;
         }
 
         if (reposition)
@@ -562,13 +644,36 @@ void WorkArea::FinishEdgeResize(const ZoneIndexSet& zones, const RECT& finalFram
     // Single pass: update the model without moving windows, drop an unmodified entry, then move only the windows
     // whose zones changed during this pass.
     const ZonesMap previousZones = ActiveZones();
+    std::optional<FancyZonesZoneRects::UnitRect> modelBefore;
+    if (m_baseRects)
+    {
+        if (const auto* before = WorkingLayouts::instance().Find(m_uniqueId, m_layout->Id(), *m_baseRects))
+        {
+            modelBefore = before->BoundsOf(zones);
+        }
+    }
+
     const auto result = ApplyEdgeResizeInternal(zones, finalFrame, moved, nullptr, false);
     if (!result.dividerDragged || !m_baseRects)
     {
         // Natural FancyZones resize (outer edges or no divider): the window stays where the user left it and
         // nothing else moves.
+        Logger::info("Edge resize end: window {}, zones {}, final frame {}, moved {}: no divider dragged, natural resize",
+                     static_cast<void*>(draggedWindow), EdgeResizeLogText::Zones(zones), EdgeResizeLogText::Rect(finalFrame), EdgeResizeLogText::Moved(moved));
         return;
     }
+
+    std::optional<FancyZonesZoneRects::UnitRect> modelAfter;
+    if (const auto* after = WorkingLayouts::instance().Find(m_uniqueId, m_layout->Id(), *m_baseRects))
+    {
+        modelAfter = after->BoundsOf(zones);
+    }
+
+    const auto logEnd = [&](const std::string& placement) {
+        Logger::info("Edge resize end: window {}, zones {}, final frame {}, moved {}, model before {} after {} (units), sides: {}; dragged window: {}",
+                     static_cast<void*>(draggedWindow), EdgeResizeLogText::Zones(zones), EdgeResizeLogText::Rect(finalFrame), EdgeResizeLogText::Moved(moved),
+                     UnitBoundsText(modelBefore), UnitBoundsText(modelAfter), EdgeResizeLogText::Sides(result.sides), placement);
+    };
 
     // The moved sides that lie on a divider (whether a side is on the work-area border is the same in the base and
     // the working rectangles: walls never reach the border).
@@ -591,6 +696,7 @@ void WorkArea::FinishEdgeResize(const ZoneIndexSet& zones, const RECT& finalFram
     if (result.outerEdgeMoved)
     {
         // An outer edge stays where the user put it: the dragged window is not repositioned.
+        logEnd("kept at the release frame (an outer edge moved)");
         RepositionSnappedWindows(draggedWindow, &previousZones);
         return;
     }
@@ -598,6 +704,7 @@ void WorkArea::FinishEdgeResize(const ZoneIndexSet& zones, const RECT& finalFram
     // Only inner edges moved. The dragged window is placed into its zones only when a dragged edge ends up more than
     // 1 px away from where the user released it (it snapped to the original line or was clamped to the minimum
     // size); otherwise the release position is kept as it is.
+    std::string placement = "kept at the release frame";
     if (draggedWindow)
     {
         const auto windowZones = m_layoutWindows.GetZoneIndexSetFromWindow(draggedWindow);
@@ -607,11 +714,18 @@ void WorkArea::FinishEdgeResize(const ZoneIndexSet& zones, const RECT& finalFram
             OffsetRect(&zoneRect, m_workAreaRect.left(), m_workAreaRect.top());
             if (ReleasedEdgeNeedsPlacement(zoneRect, finalFrame, dividerSides))
             {
+                placement = std::string("placed into its zones at ") + EdgeResizeLogText::Rect(zoneRect) +
+                            (result.clamped ? " (clamped)" : result.snapped ? " (snapped)" : " (zone differs from the release frame)");
                 RepositionWindow(draggedWindow, windowZones);
             }
         }
+        else
+        {
+            placement = "not snapped any more: not moved";
+        }
     }
 
+    logEnd(placement);
     RepositionSnappedWindows(draggedWindow, &previousZones);
 }
 

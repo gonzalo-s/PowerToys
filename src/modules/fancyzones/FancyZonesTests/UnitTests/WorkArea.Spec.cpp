@@ -1392,6 +1392,52 @@ namespace FancyZonesUnitTests
             Assert::AreEqual(1440L, ActiveRect(3).left);
         }
 
+        TEST_METHOD (LiveClampReportsTheLimitFrame)
+        {
+            // Grid 4, all occupied, 1920 x 1080: zone 0's right edge dragged to 1910, limit 1870 (zone 1 keeps 50 px)
+            auto result = m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 1910, 540 }, Right(), nullptr);
+            Assert::IsTrue(result.clamped);
+            const RECT limit{ 0, 0, 1870, 540 };
+            Assert::IsTrue(EqualRect(&limit, &result.clampedFrame) != FALSE);
+            Assert::AreEqual(size_t{ 1 }, result.sides.size());
+            Assert::AreEqual(1910L, result.sides[0].requested);
+            Assert::AreEqual(1870L, result.sides[0].final);
+            Assert::IsTrue(result.sides[0].clamped);
+
+            // further out: the wall already sits on the limit (model unchanged), still reported
+            result = m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 1915, 540 }, Right(), nullptr);
+            Assert::IsTrue(result.clamped);
+            Assert::AreEqual(1870L, result.clampedFrame.right);
+
+            // inside the limits: not clamped, clampedFrame is the requested frame
+            result = m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 1500, 540 }, Right(), nullptr);
+            Assert::IsFalse(result.clamped);
+            Assert::AreEqual(1500L, result.clampedFrame.right);
+            Assert::AreEqual(1500L, result.sides[0].final);
+
+            // zone 1's left edge dragged to 10 pushes zone 0 down to its minimum: 0 + 260 units -> 49 px
+            FancyZonesZoneRects::MovedEdges left;
+            left.left = true;
+            result = m_workArea->ApplyEdgeResize({ 1 }, RECT{ 10, 0, 1920, 540 }, left, nullptr);
+            Assert::IsTrue(result.clamped);
+            const RECT leftLimit{ 49, 0, 1920, 540 };
+            Assert::IsTrue(EqualRect(&leftLimit, &result.clampedFrame) != FALSE);
+
+            // PriorityGrid 5, 3840 x 2160, spacing 16: window edge limit 2822 (see ClampLimitsAreFiftyPixels...)
+            RecreateWorkArea(FancyZonesDataTypes::ZoneSetLayoutType::PriorityGrid, 5, 16, 3840, 2160);
+            result = m_workArea->ApplyEdgeResize({ 0 }, RECT{ 16, 16, 3500, 1072 }, Right(), nullptr);
+            Assert::IsTrue(result.clamped);
+            const RECT spacedLimit{ 16, 16, 2822, 1072 };
+            Assert::IsTrue(EqualRect(&spacedLimit, &result.clampedFrame) != FALSE);
+
+            // a single window near the border: the 50 px margin is reported as the limit (1920 - 50 = 1870)
+            RecreateWorkArea(FancyZonesDataTypes::ZoneSetLayoutType::Grid, 4, 0, 1920, 1080, false);
+            OccupyZones({ 0 });
+            result = m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 1915, 540 }, Right(), nullptr);
+            Assert::IsTrue(result.clamped);
+            Assert::AreEqual(1870L, result.clampedFrame.right);
+        }
+
         TEST_METHOD (ClampLimitsAreFiftyPixelsFromTheNeighboursFarSide)
         {
             using FancyZonesZoneRects::Side;

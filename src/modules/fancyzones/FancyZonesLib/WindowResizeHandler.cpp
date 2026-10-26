@@ -3,6 +3,10 @@
 
 #include <dwmapi.h>
 
+#include <algorithm>
+
+#include <common/logger/logger.h>
+
 #include <FancyZonesLib/FancyZonesWindowProcessing.h>
 #include <FancyZonesLib/WindowUtils.h>
 #include <FancyZonesLib/WorkArea.h>
@@ -12,6 +16,8 @@ namespace
 {
     constexpr long MovedEdgeTolerancePx = 2; // frame changes smaller than this are not treated as an edge drag
     constexpr ULONGLONG MinUpdateIntervalMs = 16; // about 60 Hz; the final pass in End() catches up
+    constexpr ULONGLONG LogIntervalMs = 100; // at most one snapped/clamped diagnostics line per 100 ms while dragging
+    constexpr long ClampFeedbackTolerancePx = 2; // the dragged edge is held at a clamp limit only beyond this distance
 }
 
 bool WindowResizeHandler::ReadFrame(HWND window, RECT& frame) noexcept
@@ -53,6 +59,7 @@ void WindowResizeHandler::Reset() noexcept
     m_lastFrame = {};
     m_moved = {};
     m_lastUpdateTick = 0;
+    m_lastLogTick = 0;
     m_cueSnaps.clear();
     m_cueShown = false;
     m_workAreaId = {};
@@ -98,6 +105,11 @@ bool WindowResizeHandler::Begin(HWND window)
     m_lastFrame = frame;
     m_workAreaId = workArea->UniqueId();
     m_layoutId = workArea->GetLayoutId();
+
+    const auto& rect = workArea->GetWorkAreaRect();
+    Logger::info("Edge resize begin: window {}, zones {}, start frame {}, work area {} {}",
+                 static_cast<void*>(window), EdgeResizeLogText::Zones(m_zones), EdgeResizeLogText::Rect(frame),
+                 winrt::to_string(m_workAreaId.toString()), EdgeResizeLogText::Rect(RECT{ rect.left(), rect.top(), rect.right(), rect.bottom() }));
     // No cue yet: it appears only once a divider edge is actually dragged (see Update). An outer-edge resize
     // stays the natural FancyZones resize, without any visual change.
     return true;
@@ -144,6 +156,20 @@ void WindowResizeHandler::Update()
     m_lastFrame = frame;
     m_lastUpdateTick = now;
 
+    // Diagnostics: only snapped or clamped updates, at most one line per LogIntervalMs.
+    const bool interesting = std::any_of(result.sides.begin(), result.sides.end(), [](const EdgeResizeSide& side) { return side.snapped || side.clamped; });
+    if (interesting && now - m_lastLogTick >= LogIntervalMs)
+    {
+        m_lastLogTick = now;
+        Logger::info("Edge resize update: window {}, frame {}, moved {}, sides: {}",
+                     static_cast<void*>(m_window), EdgeResizeLogText::Rect(frame), EdgeResizeLogText::Moved(m_moved), EdgeResizeLogText::Sides(result.sides));
+    }
+
+    if (result.clamped)
+    {
+        HoldAtClampLimit(*workArea, frame, result.clampedFrame);
+    }
+
     // Redraw the cue when it appears and whenever the highlighted line changes (snapped on/off, another line,
     // own/other line); the 16 ms throttle above still applies.
     if (result.dividerDragged && (!m_cueShown || result.snaps != m_cueSnaps))
@@ -152,6 +178,30 @@ void WindowResizeHandler::Update()
         m_cueSnaps = result.snaps;
         workArea->ShowResizeCue(m_window, m_cueSnaps);
     }
+}
+
+void WindowResizeHandler::HoldAtClampLimit(WorkArea& workArea, const RECT& frame, const RECT& limitFrame)
+{
+    // Live clamp feedback: the zone wall stopped at a limit (a pushed window's or the dragged window's own minimum, or
+    // the work-area border margin) while the mouse kept going. Put the clamped edge(s) of the dragged window on the
+    // limit so what the user sees while dragging is where the window will end up. Only the clamped edges change
+    // (limitFrame keeps the other edges of frame). The OS sizing loop re-applies the mouse position on the next mouse
+    // move; the next (throttled) update clamps again, so the edge may jitter briefly past the limit but the final
+    // position (FinishEdgeResize) is the same limit.
+    const auto beyondTolerance = [](long a, long b) { return (a > b ? a - b : b - a) > ClampFeedbackTolerancePx; };
+    if (!beyondTolerance(frame.left, limitFrame.left) && !beyondTolerance(frame.top, limitFrame.top) &&
+        !beyondTolerance(frame.right, limitFrame.right) && !beyondTolerance(frame.bottom, limitFrame.bottom))
+    {
+        return; // already (almost) at the limit: no SetWindowPos, no LOCATIONCHANGE feedback loop
+    }
+
+    // Same border adjustment as the windows placed into zones: AdjustRectForSizeWindowToRect takes a rect relative
+    // to the work-area window and returns screen coordinates.
+    const auto& workAreaRect = workArea.GetWorkAreaRect();
+    RECT local = limitFrame;
+    OffsetRect(&local, -workAreaRect.left(), -workAreaRect.top());
+    const RECT adjusted = FancyZonesWindowUtils::AdjustRectForSizeWindowToRect(m_window, local, workArea.GetWorkAreaWindow());
+    SetWindowPos(m_window, nullptr, adjusted.left, adjusted.top, adjusted.right - adjusted.left, adjusted.bottom - adjusted.top, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
 }
 
 void WindowResizeHandler::End()

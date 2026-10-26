@@ -1,6 +1,7 @@
 #pragma once
 
 #include <optional>
+#include <string>
 #include <vector>
 
 #include <FancyZonesLib/Layout.h>
@@ -9,8 +10,21 @@
 
 class ZonesOverlay;
 
+// One dragged inner side of an edge resize, in frame (screen) pixels: diagnostics and live clamp feedback.
+struct EdgeResizeSide
+{
+    FancyZonesZoneRects::Side side;
+    long requested; // the window edge as dragged
+    long final; // the window edge the working zones give that side
+    bool snapped;
+    bool clamped;
+};
+
 struct EdgeResizeResult
 {
+    bool clamped = false; // a dragged inner side stopped at a clamp limit that the requested edge lies beyond
+    RECT clampedFrame{}; // the requested frame with every clamped side moved to its limit (valid when clamped)
+    std::vector<EdgeResizeSide> sides; // every dragged inner side that has a neighbour (diagnostics)
     bool changed = false; // a zone wall moved and the layout was rebuilt
     bool atBase = true; // every inner side of the dragged block touched by this resize is at its base position
     bool dividerDragged = false; // at least one moved edge is an inner edge (it has a neighbouring zone)
@@ -18,6 +32,15 @@ struct EdgeResizeResult
     bool snapped = false; // at least one dragged inner side ended exactly on an original gridline (magnet)
     bool snappedOwnLine = false; // snapped, and every snapped side is on its own original line
     std::vector<FancyZonesZoneRects::EdgeSnap> snaps; // the gridlines the dragged sides are snapped to (for the cue)
+};
+
+// Text of the edge-resize diagnostics log lines.
+struct EdgeResizeLogText
+{
+    static std::string Rect(const RECT& rect);
+    static std::string Zones(const ZoneIndexSet& zones);
+    static std::string Moved(const FancyZonesZoneRects::MovedEdges& moved);
+    static std::string Sides(const std::vector<EdgeResizeSide>& sides);
 };
 
 // One original gridline segment of the resize cue, in pixels relative to the work-area origin.

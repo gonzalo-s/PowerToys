@@ -48,6 +48,9 @@ private:
     WorkArea* FindWorkArea() const;
     WorkArea* FindWorkAreaWithSameLayout() const; // nullptr when the bound work area is gone or its layout changed
     void Reset() noexcept;
+    // Moves the clamped edge(s) of the dragged window onto the clamp limit (limitFrame) when frame is more than 2 px
+    // past it; synchronous SetWindowPos, other edges unchanged.
+    void HoldAtClampLimit(WorkArea& workArea, const RECT& frame, const RECT& limitFrame);
 
     const WorkAreaConfiguration& m_workAreas;
     HWND m_window{};
@@ -56,6 +59,7 @@ private:
     RECT m_lastFrame{};
     FancyZonesZoneRects::MovedEdges m_moved;
     ULONGLONG m_lastUpdateTick{};
+    ULONGLONG m_lastLogTick{}; // rate limit of the diagnostics log lines while dragging
     std::vector<FancyZonesZoneRects::EdgeSnap> m_cueSnaps; // highlighted gridlines of the cue as last drawn
     bool m_cueShown = false; // the cue is shown only once a divider edge is dragged
     FancyZonesDataTypes::WorkAreaId m_workAreaId{}; // work area the drag started on
