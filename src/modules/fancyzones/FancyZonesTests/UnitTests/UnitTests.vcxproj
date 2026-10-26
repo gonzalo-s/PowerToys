@@ -63,6 +63,7 @@
     <ClCompile Include="WorkingLayouts.Spec.cpp" />
     <ClCompile Include="WorkAreaIdTests.Spec.cpp" />
     <ClCompile Include="Zone.Spec.cpp" />
+    <ClCompile Include="ZoneRectModel.Spec.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="pch.h" />

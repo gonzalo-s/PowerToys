@@ -8,6 +8,7 @@
 #include <FancyZonesLib/Layout.h>
 #include <FancyZonesLib/LayoutConfigurator.h>
 #include <FancyZonesLib/Settings.h>
+#include <FancyZonesLib/ZoneRectModel.h>
 
 #include "Util.h"
 
@@ -138,6 +139,126 @@ namespace FancyZonesUnitTests
             Assert::AreEqual(size_t{ 4 }, m_layout->Zones().size());
             Assert::AreEqual(before.right, m_layout->Zones().at(0).GetZoneRect().right);
             Assert::AreEqual(before.bottom, m_layout->Zones().at(0).GetZoneRect().bottom);
+        }
+
+        TEST_METHOD (InitFromRectsUsesGivenRectsAndSpacing)
+        {
+            const FancyZonesUtils::Rect workArea(RECT{ 0, 0, 1920, 1080 });
+            auto rects = FancyZonesZoneRects::RectsFromGrid(LayoutConfigurator::GridInfo(m_data, workArea).value());
+            rects.at(0).right = 6000;
+            rects.at(2).right = 6000;
+            rects.at(1).left = 6000;
+            rects.at(3).left = 6000;
+
+            Assert::IsTrue(m_layout->InitFromRects(workArea, rects));
+            Assert::AreEqual(17, m_layout->Spacing());
+            Assert::AreEqual(size_t{ 4 }, m_layout->Zones().size());
+
+            // column boundary at 6000 * 1920 / 10000 = 1152, spacing/2 = 8 on each side
+            Assert::AreEqual(1144L, m_layout->Zones().at(0).GetZoneRect().right);
+            Assert::AreEqual(1160L, m_layout->Zones().at(1).GetZoneRect().left);
+            Assert::AreEqual(1144L, m_layout->Zones().at(2).GetZoneRect().right);
+            Assert::AreEqual(1160L, m_layout->Zones().at(3).GetZoneRect().left);
+            // row boundary 5000 * 1080 / 10000 = 540, minus 8
+            Assert::AreEqual(532L, m_layout->Zones().at(0).GetZoneRect().bottom);
+            // work-area borders get the full spacing
+            Assert::AreEqual(17L, m_layout->Zones().at(0).GetZoneRect().left);
+            Assert::AreEqual(17L, m_layout->Zones().at(0).GetZoneRect().top);
+            Assert::AreEqual(1903L, m_layout->Zones().at(1).GetZoneRect().right);
+            Assert::AreEqual(1063L, m_layout->Zones().at(3).GetZoneRect().bottom);
+        }
+
+        TEST_METHOD (InitFromRectsAllowsSeparateWallSegments)
+        {
+            const FancyZonesUtils::Rect workArea(RECT{ 0, 0, 1920, 1080 });
+            auto rects = FancyZonesZoneRects::RectsFromGrid(LayoutConfigurator::GridInfo(m_data, workArea).value());
+            // only the top row's wall moves
+            rects.at(0).right = 6000;
+            rects.at(1).left = 6000;
+
+            Assert::IsTrue(m_layout->InitFromRects(workArea, rects));
+            Assert::AreEqual(1144L, m_layout->Zones().at(0).GetZoneRect().right);
+            Assert::AreEqual(1160L, m_layout->Zones().at(1).GetZoneRect().left);
+            // bottom row at 960: 960 - 8 = 952 and 960 + 8 = 968
+            Assert::AreEqual(952L, m_layout->Zones().at(2).GetZoneRect().right);
+            Assert::AreEqual(968L, m_layout->Zones().at(3).GetZoneRect().left);
+        }
+
+        TEST_METHOD (InitFromRectsRejectsEmptyWorkArea)
+        {
+            const FancyZonesUtils::Rect workArea(RECT{ 0, 0, 1920, 1080 });
+            const auto rects = FancyZonesZoneRects::RectsFromGrid(LayoutConfigurator::GridInfo(m_data, workArea).value());
+            Assert::IsTrue(m_layout->InitFromRects(workArea, rects));
+            const RECT before = m_layout->Zones().at(0).GetZoneRect();
+
+            Assert::IsFalse(m_layout->InitFromRects(FancyZonesUtils::Rect(RECT{ 0, 0, 0, 0 }), rects));
+            Assert::AreEqual(size_t{ 4 }, m_layout->Zones().size());
+            Assert::AreEqual(before.right, m_layout->Zones().at(0).GetZoneRect().right);
+        }
+
+        TEST_METHOD (InitFromRectsRejectsDifferentZoneCount)
+        {
+            const FancyZonesUtils::Rect workArea(RECT{ 0, 0, 1920, 1080 });
+            auto rects = FancyZonesZoneRects::RectsFromGrid(LayoutConfigurator::GridInfo(m_data, workArea).value());
+            Assert::IsTrue(m_layout->InitFromRects(workArea, rects));
+            const RECT before = m_layout->Zones().at(0).GetZoneRect();
+
+            rects.erase(3);
+            Assert::IsFalse(m_layout->InitFromRects(workArea, rects));
+            Assert::AreEqual(size_t{ 4 }, m_layout->Zones().size());
+            Assert::AreEqual(before.right, m_layout->Zones().at(0).GetZoneRect().right);
+            Assert::AreEqual(before.bottom, m_layout->Zones().at(0).GetZoneRect().bottom);
+        }
+
+        TEST_METHOD (InitFromRectsRejectsInvalidZone)
+        {
+            const FancyZonesUtils::Rect workArea(RECT{ 0, 0, 1920, 1080 });
+            auto rects = FancyZonesZoneRects::RectsFromGrid(LayoutConfigurator::GridInfo(m_data, workArea).value());
+            Assert::IsTrue(m_layout->InitFromRects(workArea, rects));
+            const RECT before = m_layout->Zones().at(1).GetZoneRect();
+
+            // negative width
+            rects.at(1).left = 9000;
+            rects.at(1).right = 2000;
+            Assert::IsFalse(m_layout->InitFromRects(workArea, rects));
+            Assert::AreEqual(before.left, m_layout->Zones().at(1).GetZoneRect().left);
+            Assert::AreEqual(before.right, m_layout->Zones().at(1).GetZoneRect().right);
+        }
+
+        TEST_METHOD (InitFromRectsMatchesGridZones)
+        {
+            const FancyZonesUtils::Rect workArea(RECT{ 0, 0, 1920, 1080 });
+            const std::vector<std::pair<ZoneSetLayoutType, int>> layouts{
+                { ZoneSetLayoutType::Grid, 4 },
+                { ZoneSetLayoutType::Columns, 3 },
+                { ZoneSetLayoutType::PriorityGrid, 5 },
+            };
+
+            for (const auto& [type, zoneCount] : layouts)
+            {
+                for (int spacing : { 0, 16 })
+                {
+                    const LayoutData data{
+                        .uuid = GUID_NULL,
+                        .type = type,
+                        .showSpacing = true,
+                        .spacing = spacing,
+                        .zoneCount = zoneCount,
+                        .sensitivityRadius = 20,
+                    };
+                    const auto grid = LayoutConfigurator::GridInfo(data, workArea).value();
+                    const auto expected = LayoutConfigurator::GridZones(workArea, grid, spacing);
+                    Assert::AreEqual(static_cast<size_t>(zoneCount), expected.size());
+
+                    Layout layout(data);
+                    Assert::IsTrue(layout.InitFromRects(workArea, FancyZonesZoneRects::RectsFromGrid(grid)));
+                    Assert::AreEqual(expected.size(), layout.Zones().size());
+                    for (const auto& [id, zone] : expected)
+                    {
+                        compareZones(zone, layout.Zones().at(id));
+                    }
+                }
+            }
         }
 
         TEST_METHOD (SpacingIsZeroWhenHidden)

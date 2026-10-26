@@ -186,6 +186,68 @@ bool Layout::InitFromGrid(const FancyZonesUtils::Rect& workArea, const FancyZone
     return true;
 }
 
+namespace
+{
+    // floor(length * units / TotalUnits); equals CalculateGridZones' "totalPercents * total / C_MULTIPLIER".
+    constexpr long ScaleUnits(long long length, int units) noexcept
+    {
+        const long long numerator = length * units;
+        long long quotient = numerator / FancyZonesZoneRects::TotalUnits;
+        if (numerator % FancyZonesZoneRects::TotalUnits != 0 && numerator < 0)
+        {
+            --quotient;
+        }
+
+        return static_cast<long>(quotient);
+    }
+}
+
+bool Layout::InitFromRects(const FancyZonesUtils::Rect& workArea, const FancyZonesZoneRects::UnitRects& rects) noexcept
+{
+    using FancyZonesZoneRects::TotalUnits;
+
+    if (workArea.width() == 0 || workArea.height() == 0)
+    {
+        Logger::error(L"Layout rects initialization: invalid work area");
+        return false;
+    }
+
+    if (m_data.zoneCount < 0 || rects.size() != static_cast<size_t>(m_data.zoneCount))
+    {
+        return false;
+    }
+
+    // Same pixel maths and spacing inset as CalculateGridZones (LayoutConfigurator.cpp).
+    const long long width = workArea.width();
+    const long long height = workArea.height();
+    const int spacing = Spacing();
+    ZonesMap zones;
+    for (const auto& [id, rect] : rects)
+    {
+        long left = ScaleUnits(width, rect.left);
+        long top = ScaleUnits(height, rect.top);
+        long right = ScaleUnits(width, rect.right);
+        long bottom = ScaleUnits(height, rect.bottom);
+
+        left += rect.left == 0 ? spacing : spacing / 2;
+        top += rect.top == 0 ? spacing : spacing / 2;
+        right -= rect.right == TotalUnits ? spacing : spacing / 2;
+        bottom -= rect.bottom == TotalUnits ? spacing : spacing / 2;
+
+        Zone zone(RECT{ left, top, right, bottom }, id);
+        if (!zone.IsValid())
+        {
+            Logger::error(L"Layout rects initialization: invalid zone");
+            return false;
+        }
+
+        zones.insert({ id, zone });
+    }
+
+    m_zones = std::move(zones);
+    return true;
+}
+
 int Layout::Spacing() const noexcept
 {
     return m_data.showSpacing ? m_data.spacing : 0;

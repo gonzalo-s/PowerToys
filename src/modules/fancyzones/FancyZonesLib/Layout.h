@@ -4,6 +4,7 @@
 #include <FancyZonesLib/util.h>
 
 #include <FancyZonesLib/LayoutConfigurator.h> // ZonesMap
+#include <FancyZonesLib/ZoneRectModel.h>
 
 class Layout
 {
@@ -14,6 +15,10 @@ public:
     bool Init(const FancyZonesUtils::Rect& workAreaRect, HMONITOR monitor) noexcept;
     // Rebuilds the zones from an explicit grid description (used for working layouts), keeping this layout's spacing.
     bool InitFromGrid(const FancyZonesUtils::Rect& workAreaRect, const FancyZonesDataTypes::GridLayoutInfo& grid) noexcept;
+    // Rebuilds the zones from zone rectangles in units of 1/10000 of the work area (used for working layouts), keeping
+    // this layout's spacing. Returns false and leaves the zones untouched on an empty work area, a zone-count mismatch
+    // or an invalid zone.
+    bool InitFromRects(const FancyZonesUtils::Rect& workAreaRect, const FancyZonesZoneRects::UnitRects& rects) noexcept;
     int Spacing() const noexcept;
 
     GUID Id() const noexcept;

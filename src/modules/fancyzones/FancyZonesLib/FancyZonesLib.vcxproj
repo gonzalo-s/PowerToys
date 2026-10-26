@@ -82,6 +82,7 @@
     <ClInclude Include="Colors.h" />
     <ClInclude Include="HighlightedZones.h" />
     <ClInclude Include="ZoneIndexSetBitmask.h" />
+    <ClInclude Include="ZoneRectModel.h" />
     <ClInclude Include="WorkArea.h" />
     <ClInclude Include="WorkingLayouts.h" />
     <ClInclude Include="ZonesOverlay.h" />
@@ -139,6 +140,7 @@
     <ClCompile Include="WindowResizeHandler.cpp" />
     <ClCompile Include="WindowUtils.cpp" />
     <ClCompile Include="Zone.cpp" />
+    <ClCompile Include="ZoneRectModel.cpp" />
     <ClCompile Include="WorkArea.cpp" />
     <ClCompile Include="WorkingLayouts.cpp" />
     <ClCompile Include="HighlightedZones.cpp" />
