@@ -495,7 +495,7 @@ EdgeResizeResult WorkArea::ApplyEdgeResizeInternal(const ZoneIndexSet& zones, co
         const int position = static_cast<int>(CeilDiv(static_cast<long long>(dragged.edge) * TotalUnits, dragged.length));
         const int minSize = static_cast<int>(static_cast<long long>(MinSizePx) * TotalUnits / dragged.length);
         const int snapRadius = static_cast<int>(static_cast<long long>(SnapRadiusPx) * TotalUnits / dragged.length);
-        if (model.MoveEdge(zones, dragged.side, position, minSize, snapRadius) == MoveResult::Moved)
+        if (model.MoveEdge(zones, dragged.side, position, minSize, snapRadius).result == MoveResult::Moved)
         {
             result.changed = true;
         }

@@ -173,6 +173,76 @@ namespace FancyZonesZoneRects
         return rects;
     }
 
+    std::vector<int> InnerCoordinates(const UnitRects& rects, bool vertical)
+    {
+        std::set<int> coordinates;
+        for (const auto& entry : rects)
+        {
+            const UnitRect& rect = entry.second;
+            for (const int value : { Low(rect, vertical), High(rect, vertical) })
+            {
+                if (value > 0 && value < TotalUnits)
+                {
+                    coordinates.insert(value);
+                }
+            }
+        }
+
+        return std::vector<int>(coordinates.begin(), coordinates.end());
+    }
+
+    std::vector<GridLine> InnerGridLines(const UnitRects& rects)
+    {
+        std::vector<GridLine> lines;
+        for (const bool vertical : { true, false })
+        {
+            // position -> extents along the line of every inner side lying on it
+            std::map<int, std::vector<std::pair<int, int>>> sides;
+            for (const auto& entry : rects)
+            {
+                const UnitRect& rect = entry.second;
+                const int start = vertical ? rect.top : rect.left;
+                const int end = vertical ? rect.bottom : rect.right;
+                for (const int value : { Low(rect, vertical), High(rect, vertical) })
+                {
+                    if (value > 0 && value < TotalUnits && end > start)
+                    {
+                        sides[value].emplace_back(start, end);
+                    }
+                }
+            }
+
+            for (auto& [position, extents] : sides)
+            {
+                std::sort(extents.begin(), extents.end());
+                std::optional<GridLine> current;
+                for (const auto& [start, end] : extents)
+                {
+                    if (current && start <= current->end)
+                    {
+                        current->end = (std::max)(current->end, end); // overlapping or touching: same segment
+                    }
+                    else
+                    {
+                        if (current)
+                        {
+                            lines.push_back(*current);
+                        }
+
+                        current = GridLine{ vertical, position, start, end };
+                    }
+                }
+
+                if (current)
+                {
+                    lines.push_back(*current);
+                }
+            }
+        }
+
+        return lines;
+    }
+
     ZoneRectModel::ZoneRectModel(const UnitRects& base) :
         m_base(base),
         m_current(base)
@@ -205,19 +275,19 @@ namespace FancyZonesZoneRects
         return bounds.has_value() && !OnBorder(SideOf(*bounds, side), side);
     }
 
-    MoveResult ZoneRectModel::MoveEdge(const ZoneIndexSet& zones, Side side, int position, int minSize, int snapRadius)
+    MoveOutcome ZoneRectModel::MoveEdge(const ZoneIndexSet& zones, Side side, int position, int minSize, int snapRadius)
     {
         const auto bounds = BoundsOf(zones);
         const auto baseBounds = BaseBoundsOf(zones);
         if (!bounds || !baseBounds)
         {
-            return MoveResult::Unchanged;
+            return { MoveResult::Unchanged };
         }
 
         const int wall = SideOf(*bounds, side);
         if (OnBorder(wall, side))
         {
-            return MoveResult::Outer;
+            return { MoveResult::Outer };
         }
 
         const bool vertical = IsVertical(side);
@@ -269,15 +339,32 @@ namespace FancyZonesZoneRects
 
         if (b.empty())
         {
-            return MoveResult::Unchanged; // inconsistent tiling
+            return { MoveResult::Unchanged }; // inconsistent tiling
         }
 
-        int target = position;
+        // Magnet: the nearest original gridline on this axis within snapRadius (before the clamp, which still wins).
+        // Tie: the block's own base side position, then the lower coordinate (candidates are sorted ascending).
         const int basePosition = SideOf(*baseBounds, side);
-        if (std::abs(target - basePosition) <= snapRadius)
+        std::optional<int> snapLine;
+        if (snapRadius >= 0)
         {
-            target = basePosition;
+            for (const int candidate : InnerCoordinates(m_base, vertical))
+            {
+                const int distance = std::abs(position - candidate);
+                if (distance > snapRadius)
+                {
+                    continue;
+                }
+
+                const int best = snapLine ? std::abs(position - *snapLine) : (std::numeric_limits<int>::max)();
+                if (distance < best || (distance == best && candidate == basePosition))
+                {
+                    snapLine = candidate;
+                }
+            }
         }
+
+        int target = snapLine.value_or(position);
 
         // Per-zone minimum: a zone already smaller than minSize may grow but never shrinks below the smaller of its
         // current and its base size, so it does not force the wall to jump and can return to its base size.
@@ -304,13 +391,24 @@ namespace FancyZonesZoneRects
 
         if (low > top)
         {
-            return MoveResult::Unchanged; // defensive only: the current wall position always satisfies both bounds
+            return { MoveResult::Unchanged }; // defensive only: the current wall position always satisfies both bounds
         }
 
         target = std::clamp(target, low, top);
+
+        MoveOutcome outcome;
+        if (snapLine && target == *snapLine)
+        {
+            // only reported when the clamp kept the snapped line
+            outcome.snapped = true;
+            outcome.snappedPosition = *snapLine;
+            outcome.ownBaseLine = *snapLine == basePosition;
+        }
+
         if (target == wall)
         {
-            return MoveResult::Unchanged;
+            outcome.result = MoveResult::Unchanged;
+            return outcome;
         }
 
         for (ZoneIndex id : a)
@@ -324,6 +422,7 @@ namespace FancyZonesZoneRects
             (high ? Low(rect, vertical) : High(rect, vertical)) = target;
         }
 
-        return MoveResult::Moved;
+        outcome.result = MoveResult::Moved;
+        return outcome;
     }
 }

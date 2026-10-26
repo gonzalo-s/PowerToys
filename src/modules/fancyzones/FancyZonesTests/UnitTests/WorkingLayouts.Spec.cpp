@@ -69,7 +69,7 @@ namespace FancyZonesUnitTests
             const auto base = MakeGrid({ 5000, 5000 });
 
             auto& model = WorkingLayouts::instance().GetOrCreate(id, m_layout, base);
-            Assert::IsTrue(model.MoveEdge({ 0 }, Side::Right, 6000, 500, 0) == MoveResult::Moved);
+            Assert::IsTrue(model.MoveEdge({ 0 }, Side::Right, 6000, 500, 0).result == MoveResult::Moved);
 
             auto* found = WorkingLayouts::instance().Find(id, m_layout, base);
             Assert::IsNotNull(found);

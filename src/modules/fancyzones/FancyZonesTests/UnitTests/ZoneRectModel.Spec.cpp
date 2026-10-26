@@ -32,6 +32,23 @@ namespace FancyZonesUnitTests
         // zones 0 1 on top, zone 2 spans the whole bottom row
         UnitRects Wide() { return RectsFromGrid(MakeGrid({ 5000, 5000 }, { 5000, 5000 }, { { 0, 1 }, { 2, 2 } })); }
 
+        // top row: five 2000-wide zones 0..4; bottom row: zone 5 (0..2000) and zone 6 spanning 2000..10000.
+        // Vertical gridlines at 2000, 4000, 6000, 8000; the bottom-row wall (zone 5 | zone 6) can reach all of them.
+        UnitRects Steps() { return RectsFromGrid(MakeGrid({ 5000, 5000 }, { 2000, 2000, 2000, 2000, 2000 }, { { 0, 1, 2, 3, 4 }, { 5, 6, 6, 6, 6 } })); }
+
+        // Steps transposed: left column zones 0..4 (2000 high each); right column zone 5 (y 0..2000) and zone 6 (y 2000..10000).
+        UnitRects StepsTransposed()
+        {
+            return RectsFromGrid(MakeGrid({ 2000, 2000, 2000, 2000, 2000 }, { 5000, 5000 }, { { 0, 5 }, { 1, 6 }, { 2, 6 }, { 3, 6 }, { 4, 6 } }));
+        }
+
+        void AssertSnapped(const MoveOutcome& outcome, int position, bool ownBaseLine)
+        {
+            Assert::IsTrue(outcome.snapped);
+            Assert::AreEqual(position, outcome.snappedPosition);
+            Assert::AreEqual(ownBaseLine, outcome.ownBaseLine);
+        }
+
         UnitRects OneRow(const std::vector<int>& cols)
         {
             std::vector<std::vector<int>> map(1);
@@ -56,14 +73,14 @@ namespace FancyZonesUnitTests
             AssertRect(model.Base().at(id), model.Current().at(id));
         }
 
-        void AssertMoved(MoveResult result)
+        void AssertMoved(const MoveOutcome& outcome)
         {
-            Assert::IsTrue(result == MoveResult::Moved);
+            Assert::IsTrue(outcome.result == MoveResult::Moved);
         }
 
-        void AssertUnchanged(MoveResult result)
+        void AssertUnchanged(const MoveOutcome& outcome)
         {
-            Assert::IsTrue(result == MoveResult::Unchanged);
+            Assert::IsTrue(outcome.result == MoveResult::Unchanged);
         }
     }
 
@@ -162,10 +179,10 @@ namespace FancyZonesUnitTests
         TEST_METHOD (OuterSidesAreNotMoved)
         {
             ZoneRectModel model(G22());
-            Assert::IsTrue(model.MoveEdge({ 0 }, Side::Left, 1000, 500, 0) == MoveResult::Outer);
-            Assert::IsTrue(model.MoveEdge({ 0 }, Side::Top, 1000, 500, 0) == MoveResult::Outer);
-            Assert::IsTrue(model.MoveEdge({ 3 }, Side::Right, 9000, 500, 0) == MoveResult::Outer);
-            Assert::IsTrue(model.MoveEdge({ 3 }, Side::Bottom, 9000, 500, 0) == MoveResult::Outer);
+            Assert::IsTrue(model.MoveEdge({ 0 }, Side::Left, 1000, 500, 0).result == MoveResult::Outer);
+            Assert::IsTrue(model.MoveEdge({ 0 }, Side::Top, 1000, 500, 0).result == MoveResult::Outer);
+            Assert::IsTrue(model.MoveEdge({ 3 }, Side::Right, 9000, 500, 0).result == MoveResult::Outer);
+            Assert::IsTrue(model.MoveEdge({ 3 }, Side::Bottom, 9000, 500, 0).result == MoveResult::Outer);
             Assert::IsFalse(model.IsModified());
             Assert::IsTrue(model.Current() == model.Base());
 
@@ -423,6 +440,176 @@ namespace FancyZonesUnitTests
             Assert::IsFalse(moved.bottom);
             Assert::IsTrue(moved.any());
             Assert::IsFalse(DetectMovedEdges(before, before, 2).any());
+        }
+
+        TEST_METHOD (InnerCoordinatesExcludeBorders)
+        {
+            Assert::IsTrue(InnerCoordinates(P5(), true) == std::vector<int>{ 2500, 7500 });
+            Assert::IsTrue(InnerCoordinates(P5(), false) == std::vector<int>{ 5000 });
+            Assert::IsTrue(InnerCoordinates(Steps(), true) == std::vector<int>{ 2000, 4000, 6000, 8000 });
+            Assert::IsTrue(InnerCoordinates(Steps(), false) == std::vector<int>{ 5000 });
+            Assert::IsTrue(InnerCoordinates(G22(), true) == std::vector<int>{ 5000 });
+            Assert::IsTrue(InnerCoordinates(OneRow({ 3333, 3333, 3333 }), true) == std::vector<int>{ 3333, 6666 });
+            Assert::IsTrue(InnerCoordinates(OneRow({ 3333, 3333, 3333 }), false).empty());
+        }
+
+        TEST_METHOD (InnerGridLinesMergeSegments)
+        {
+            // P5: both vertical lines run through the whole height (zone 1 spans both rows); the horizontal line is
+            // interrupted by zone 1 (no inner side between 2500 and 7500)
+            const std::vector<GridLine> p5{
+                { true, 2500, 0, 10000 },
+                { true, 7500, 0, 10000 },
+                { false, 5000, 0, 2500 },
+                { false, 5000, 7500, 10000 },
+            };
+            Assert::IsTrue(InnerGridLines(P5()) == p5);
+
+            // Steps: x = 2000 is made of the top-row segment (0..5000) and the bottom-row segment (5000..10000), which
+            // touch and merge; the other vertical lines exist only in the top row; the five touching bottom sides of
+            // the top row merge into one horizontal line
+            const std::vector<GridLine> steps{
+                { true, 2000, 0, 10000 },
+                { true, 4000, 0, 5000 },
+                { true, 6000, 0, 5000 },
+                { true, 8000, 0, 5000 },
+                { false, 5000, 0, 10000 },
+            };
+            Assert::IsTrue(InnerGridLines(Steps()) == steps);
+        }
+
+        TEST_METHOD (SnapsToAnotherOriginalLine)
+        {
+            // zone 5's right side (own base 2000) dragged to 6100: the gridline 6000 is 100 away (<= 200)
+            ZoneRectModel model(Steps());
+            const auto outcome = model.MoveEdge({ 5 }, Side::Right, 6100, 500, 200);
+            AssertMoved(outcome);
+            AssertSnapped(outcome, 6000, false);
+            Assert::AreEqual(6000, model.Current().at(5).right);
+            Assert::AreEqual(6000, model.Current().at(6).left);
+            // the top row is a separate wall segment
+            AssertAtBase(model, 1);
+            AssertAtBase(model, 2);
+        }
+
+        TEST_METHOD (NearestOfTwoCandidatesWins)
+        {
+            ZoneRectModel model(Steps());
+            // 4800: 4000 is 800 away, 6000 is 1200 away, both <= 1500
+            auto outcome = model.MoveEdge({ 5 }, Side::Right, 4800, 500, 1500);
+            AssertMoved(outcome);
+            AssertSnapped(outcome, 4000, false);
+            Assert::AreEqual(4000, model.Current().at(5).right);
+
+            // 5300: 4000 is 1300 away, 6000 is 700 away
+            outcome = model.MoveEdge({ 5 }, Side::Right, 5300, 500, 1500);
+            AssertMoved(outcome);
+            AssertSnapped(outcome, 6000, false);
+            Assert::AreEqual(6000, model.Current().at(5).right);
+
+            // 3100: the own line 2000 is 1100 away but 4000 is nearer (900)
+            outcome = model.MoveEdge({ 5 }, Side::Right, 3100, 500, 1500);
+            AssertMoved(outcome);
+            AssertSnapped(outcome, 4000, false);
+            Assert::AreEqual(4000, model.Current().at(5).right);
+        }
+
+        TEST_METHOD (TiePrefersOwnBaseLineThenLowerCoordinate)
+        {
+            ZoneRectModel model(Steps());
+            auto outcome = model.MoveEdge({ 5 }, Side::Right, 3500, 500, 0);
+            AssertMoved(outcome);
+            Assert::IsFalse(outcome.snapped);
+
+            // 3000: 2000 (own) and 4000 are both 1000 away
+            outcome = model.MoveEdge({ 5 }, Side::Right, 3000, 500, 1000);
+            AssertMoved(outcome);
+            AssertSnapped(outcome, 2000, true);
+            Assert::IsFalse(model.IsModified());
+
+            // 7000: 6000 and 8000 are both 1000 away, neither is the own line: the lower one wins
+            outcome = model.MoveEdge({ 5 }, Side::Right, 7000, 500, 1000);
+            AssertMoved(outcome);
+            AssertSnapped(outcome, 6000, false);
+            Assert::AreEqual(6000, model.Current().at(5).right);
+        }
+
+        TEST_METHOD (NoSnapOutsideRadius)
+        {
+            ZoneRectModel model(Steps());
+            // 7000: 6000 and 8000 are 1000 away (> 999)
+            auto outcome = model.MoveEdge({ 5 }, Side::Right, 7000, 500, 999);
+            AssertMoved(outcome);
+            Assert::IsFalse(outcome.snapped);
+            Assert::IsFalse(outcome.ownBaseLine);
+            Assert::AreEqual(7000, model.Current().at(5).right);
+
+            // the work-area border (10000) is not a gridline: 9900 stays (high = 10000 - min(0, ...) = 10000)
+            outcome = model.MoveEdge({ 5 }, Side::Right, 9900, 0, 200);
+            AssertMoved(outcome);
+            Assert::IsFalse(outcome.snapped);
+            Assert::AreEqual(9900, model.Current().at(5).right);
+        }
+
+        TEST_METHOD (SnapsToOwnBaseLine)
+        {
+            ZoneRectModel model(Steps());
+            AssertMoved(model.MoveEdge({ 5 }, Side::Right, 2600, 500, 0));
+
+            auto outcome = model.MoveEdge({ 5 }, Side::Right, 2150, 500, 200);
+            AssertMoved(outcome);
+            AssertSnapped(outcome, 2000, true);
+            Assert::IsFalse(model.IsModified());
+
+            // still on the line: nothing moves, but the snap is reported
+            outcome = model.MoveEdge({ 5 }, Side::Right, 2050, 500, 200);
+            AssertUnchanged(outcome);
+            AssertSnapped(outcome, 2000, true);
+        }
+
+        TEST_METHOD (ClampedSnapIsNotReported)
+        {
+            // 7900 snaps to 8000, but zone 6 keeps min(2500, 8000, 8000): high = 10000 - 2500 = 7500
+            ZoneRectModel model(Steps());
+            auto outcome = model.MoveEdge({ 5 }, Side::Right, 7900, 2500, 200);
+            AssertMoved(outcome);
+            Assert::IsFalse(outcome.snapped);
+            Assert::AreEqual(7500, model.Current().at(5).right);
+            Assert::AreEqual(7500, model.Current().at(6).left);
+
+            // P5: zone 0's right side (base 2500) dragged to 7400 snaps to 7500, but zone 1 (2500..7500) keeps 500:
+            // high = 7500 - min(500, 5000, 5000) = 7000
+            ZoneRectModel p5(P5());
+            outcome = p5.MoveEdge({ 0 }, Side::Right, 7400, 500, 200);
+            AssertMoved(outcome);
+            Assert::IsFalse(outcome.snapped);
+            Assert::AreEqual(7000, p5.Current().at(0).right);
+            Assert::AreEqual(7000, p5.Current().at(1).left);
+        }
+
+        TEST_METHOD (HorizontalSidesSnapToHorizontalLines)
+        {
+            ZoneRectModel model(StepsTransposed());
+            // zone 5's bottom (own base 2000) dragged to 6100: the horizontal gridline 6000 is 100 away
+            auto outcome = model.MoveEdge({ 5 }, Side::Bottom, 6100, 500, 200);
+            AssertMoved(outcome);
+            AssertSnapped(outcome, 6000, false);
+            Assert::AreEqual(6000, model.Current().at(5).bottom);
+            Assert::AreEqual(6000, model.Current().at(6).top);
+
+            // the vertical gridline 5000 is not a candidate for a horizontal side
+            outcome = model.MoveEdge({ 5 }, Side::Bottom, 5050, 500, 200);
+            AssertMoved(outcome);
+            Assert::IsFalse(outcome.snapped);
+            Assert::AreEqual(5050, model.Current().at(5).bottom);
+        }
+
+        TEST_METHOD (OuterSideIsNotSnapped)
+        {
+            ZoneRectModel model(G22());
+            const auto outcome = model.MoveEdge({ 0 }, Side::Left, 10, 500, 200);
+            Assert::IsTrue(outcome.result == MoveResult::Outer);
+            Assert::IsFalse(outcome.snapped);
         }
 
         TEST_METHOD (MovedEdgesAccumulate)

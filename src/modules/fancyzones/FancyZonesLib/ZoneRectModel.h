@@ -2,6 +2,7 @@
 
 #include <map>
 #include <optional>
+#include <vector>
 
 #include <windef.h>
 
@@ -65,6 +66,33 @@ namespace FancyZonesZoneRects
         Moved,
     };
 
+    struct MoveOutcome
+    {
+        MoveResult result = MoveResult::Unchanged;
+        bool snapped = false; // the side ended exactly on an original gridline that was within the snap radius
+        int snappedPosition = 0; // that gridline (units), valid when snapped
+        bool ownBaseLine = false; // that gridline is the dragged block's own base side position
+    };
+
+    // Distinct inner coordinates of the rectangles' sides on one axis (x for vertical lines, y for horizontal lines),
+    // sorted ascending; 0 and TotalUnits (work-area borders) are excluded. These are the original gridlines.
+    std::vector<int> InnerCoordinates(const UnitRects& rects, bool vertical);
+
+    // One original gridline segment: the inner sides of the rectangles at position, merged where they overlap or touch.
+    struct GridLine
+    {
+        bool vertical; // vertical line: position is an x coordinate and start/end are y coordinates
+        int position;
+        int start;
+        int end;
+
+        bool operator==(const GridLine& other) const noexcept = default;
+    };
+
+    // Every inner gridline segment of the rectangles: vertical lines first, then horizontal ones, each sorted by
+    // position and start.
+    std::vector<GridLine> InnerGridLines(const UnitRects& rects);
+
     // Working copy of a grid layout as independent zone rectangles. Moving a side of a block of zones moves only the
     // wall segment that block touches (plus whatever is needed to keep the tiling consistent), not the whole gridline.
     class ZoneRectModel
@@ -82,10 +110,12 @@ namespace FancyZonesZoneRects
         std::optional<UnitRect> BoundsOf(const ZoneIndexSet& zones) const;
         std::optional<UnitRect> BaseBoundsOf(const ZoneIndexSet& zones) const;
 
-        // Moves one side of the block formed by zones (the dragged window's zone set) to position: the side snaps to
-        // the base position of that side when within snapRadius, then it is clamped so that every zone on either side
-        // of the moved wall keeps at least min(minSize, its current size, its base size) (negative minSize = 0).
-        MoveResult MoveEdge(const ZoneIndexSet& zones, Side side, int position, int minSize, int snapRadius);
+        // Moves one side of the block formed by zones (the dragged window's zone set) to position. Magnet: the side
+        // snaps to the nearest original gridline on its axis (InnerCoordinates of the base rects) within snapRadius;
+        // on a tie the block's own base side position wins, then the lower coordinate. Then it is clamped so that
+        // every zone on either side of the moved wall keeps at least min(minSize, its current size, its base size)
+        // (negative minSize = 0). The outcome reports the snap only when the clamped position is the snapped line.
+        MoveOutcome MoveEdge(const ZoneIndexSet& zones, Side side, int position, int minSize, int snapRadius);
 
         // False when the side of the block lies on the work-area border (or a zone id is unknown).
         bool HasNeighbour(const ZoneIndexSet& zones, Side side) const;
