@@ -11,6 +11,8 @@
 #include <FancyZonesLib/FancyZonesData/DefaultLayouts.h>
 #include <FancyZonesLib/FancyZonesWindowProperties.h>
 #include <FancyZonesLib/LayoutAssignedWindows.h>
+#include <FancyZonesLib/DividerModel.h>
+#include <FancyZonesLib/WorkingLayouts.h>
 #include "Util.h"
 
 #include <common/utils/process_path.h>
@@ -472,6 +474,166 @@ namespace FancyZonesUnitTests
 
             const auto& layoutWindows = workArea->GetLayoutWindows();
             Assert::IsTrue(layoutWindows.GetZoneIndexSetFromWindow(window).empty());
+        }
+    };
+
+    TEST_CLASS (WorkAreaEdgeResizeUnitTests)
+    {
+        FancyZonesDataTypes::WorkAreaId m_workAreaId;
+        FancyZonesUtils::Rect m_workAreaRect{ RECT(0, 0, 1920, 1080) };
+        std::unique_ptr<WorkArea> m_workArea;
+
+        TEST_METHOD_INITIALIZE(Init) noexcept
+        {
+            m_workAreaId.monitorId.deviceId.id = L"DELA026";
+            m_workAreaId.monitorId.deviceId.instanceId = L"5&10a58c63&0&UID16777488";
+            m_workAreaId.monitorId.serialNumber = L"serial-number";
+            m_workAreaId.virtualDesktopId = FancyZonesUtils::GuidFromString(L"{39B25DD2-130D-4B5D-8851-4791D66B1539}").value();
+
+            AppZoneHistory::instance().LoadData();
+            AppliedLayouts::instance().LoadData();
+            CustomLayouts::instance().LoadData();
+            DefaultLayouts::instance().LoadData();
+            WorkingLayouts::instance().Clear();
+
+            LayoutData layout{
+                .uuid = FancyZonesUtils::GuidFromString(L"{61FA9FC0-26A6-4B37-A834-491C148DFC58}").value(),
+                .type = FancyZonesDataTypes::ZoneSetLayoutType::Grid,
+                .showSpacing = false,
+                .spacing = 0,
+                .zoneCount = 4,
+                .sensitivityRadius = 20,
+            };
+            AppliedLayouts::instance().ApplyLayout(m_workAreaId, layout);
+
+            m_workArea = WorkArea::Create({}, m_workAreaId, {}, m_workAreaRect);
+        }
+
+        TEST_METHOD_CLEANUP(CleanUp) noexcept
+        {
+            m_workArea.reset();
+            WorkingLayouts::instance().Clear();
+            std::filesystem::remove(AppliedLayouts::AppliedLayoutsFileName());
+            std::filesystem::remove(AppZoneHistory::AppZoneHistoryFileName());
+            std::filesystem::remove(CustomLayouts::CustomLayoutsFileName());
+            std::filesystem::remove(DefaultLayouts::DefaultLayoutsFileName());
+
+            // drop the in-memory applied layouts too, so they do not leak into other test classes
+            AppliedLayouts::instance().LoadData();
+        }
+
+        static constexpr FancyZonesDividers::MovedEdges Right()
+        {
+            FancyZonesDividers::MovedEdges moved;
+            moved.right = true;
+            return moved;
+        }
+
+        static constexpr FancyZonesDividers::MovedEdges Left()
+        {
+            FancyZonesDividers::MovedEdges moved;
+            moved.left = true;
+            return moved;
+        }
+
+    public:
+        TEST_METHOD (GridLayoutSupportsEdgeResize)
+        {
+            Assert::IsTrue(m_workArea->SupportsEdgeResize());
+        }
+
+        TEST_METHOD (MovingRightEdgeMovesWholeDivider)
+        {
+            // zone 0 is the top-left zone, its visible frame is 0,0,960,540; drag the right edge to x = 1160
+            const auto result = m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 1160, 540 }, Right(), nullptr);
+            Assert::IsTrue(result.changed);
+            Assert::IsFalse(result.atBase);
+
+            const auto& zones = m_workArea->GetLayout()->Zones();
+            Assert::IsTrue(std::abs(zones.at(0).GetZoneRect().right - 1160L) <= 1);
+            Assert::IsTrue(std::abs(zones.at(1).GetZoneRect().left - 1160L) <= 1);
+            // whole line: the bottom row follows
+            Assert::IsTrue(std::abs(zones.at(2).GetZoneRect().right - 1160L) <= 1);
+            Assert::IsTrue(std::abs(zones.at(3).GetZoneRect().left - 1160L) <= 1);
+            // zones still tile the work area
+            Assert::AreEqual(1920L, zones.at(1).GetZoneRect().right);
+            Assert::AreEqual(zones.at(0).GetZoneRect().right, zones.at(1).GetZoneRect().left);
+        }
+
+        TEST_METHOD (SnapsBackToBaseNearOriginalLine)
+        {
+            m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 1160, 540 }, Right(), nullptr);
+
+            // 960 + 5 px is within the snap radius, so the divider returns exactly to the base line
+            const auto result = m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 965, 540 }, Right(), nullptr);
+            Assert::IsTrue(result.changed);
+            Assert::IsTrue(result.atBase);
+            Assert::AreEqual(960L, m_workArea->GetLayout()->Zones().at(0).GetZoneRect().right);
+        }
+
+        TEST_METHOD (OuterEdgeDoesNothing)
+        {
+            const auto result = m_workArea->ApplyEdgeResize({ 0 }, RECT{ -100, 0, 960, 540 }, Left(), nullptr);
+            Assert::IsFalse(result.changed);
+            Assert::AreEqual(0L, m_workArea->GetLayout()->Zones().at(0).GetZoneRect().left);
+        }
+
+        TEST_METHOD (DividerIsClampedToMinimumZoneSize)
+        {
+            m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 1900, 540 }, Right(), nullptr);
+            const auto& zones = m_workArea->GetLayout()->Zones();
+            // the right zone keeps at least the minimum track size (90 px)
+            Assert::IsTrue(zones.at(1).GetZoneRect().right - zones.at(1).GetZoneRect().left >= 89);
+        }
+
+        TEST_METHOD (FinishRemovesEntryWhenBackAtBase)
+        {
+            m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 1160, 540 }, Right(), nullptr);
+            m_workArea->FinishEdgeResize({ 0 }, RECT{ 0, 0, 962, 540 }, Right());
+
+            Assert::AreEqual(960L, m_workArea->GetLayout()->Zones().at(0).GetZoneRect().right);
+            const auto base = LayoutConfigurator::GridInfo(AppliedLayouts::instance().GetDeviceLayout(m_workAreaId).value()).value();
+            Assert::IsNull(WorkingLayouts::instance().Find(m_workAreaId, m_workArea->GetLayoutId(), base));
+        }
+
+        TEST_METHOD (FinishKeepsModifiedLayout)
+        {
+            m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 1160, 540 }, Right(), nullptr);
+            m_workArea->FinishEdgeResize({ 0 }, RECT{ 0, 0, 1160, 540 }, Right());
+
+            Assert::IsTrue(std::abs(m_workArea->GetLayout()->Zones().at(0).GetZoneRect().right - 1160L) <= 1);
+        }
+
+        TEST_METHOD (RecreatedWorkAreaKeepsWorkingLayout)
+        {
+            m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 1160, 540 }, Right(), nullptr);
+            m_workArea->FinishEdgeResize({ 0 }, RECT{ 0, 0, 1160, 540 }, Right());
+
+            // simulates the work area being rebuilt after display changes / resume from hibernate
+            m_workArea.reset();
+            m_workArea = WorkArea::Create({}, m_workAreaId, {}, m_workAreaRect);
+
+            Assert::IsTrue(std::abs(m_workArea->GetLayout()->Zones().at(0).GetZoneRect().right - 1160L) <= 1);
+        }
+
+        TEST_METHOD (ChangingLayoutDiscardsWorkingLayout)
+        {
+            m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 1160, 540 }, Right(), nullptr);
+            m_workArea->FinishEdgeResize({ 0 }, RECT{ 0, 0, 1160, 540 }, Right());
+
+            LayoutData other{
+                .uuid = GUID_NULL,
+                .type = FancyZonesDataTypes::ZoneSetLayoutType::Columns,
+                .showSpacing = false,
+                .spacing = 0,
+                .zoneCount = 3,
+                .sensitivityRadius = 20,
+            };
+            AppliedLayouts::instance().ApplyLayout(m_workAreaId, other);
+            m_workArea->InitLayout();
+
+            Assert::AreEqual(size_t{ 3 }, m_workArea->GetLayout()->Zones().size());
+            Assert::IsTrue(std::abs(m_workArea->GetLayout()->Zones().at(0).GetZoneRect().right - 640L) <= 1);
         }
     };
 }

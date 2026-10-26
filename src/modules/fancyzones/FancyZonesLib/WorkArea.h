@@ -3,10 +3,17 @@
 #include <optional>
 #include <vector>
 
+#include <FancyZonesLib/DividerModel.h>
 #include <FancyZonesLib/Layout.h>
 #include <FancyZonesLib/LayoutAssignedWindows.h>
 
 class ZonesOverlay;
+
+struct EdgeResizeResult
+{
+    bool changed = false; // a divider moved and the layout was rebuilt
+    bool atBase = true; // every divider touched by this resize is at its base position
+};
 
 class WorkArea
 {
@@ -48,7 +55,13 @@ public:
     
     void InitLayout();
     void InitSnappedWindows();
-    void UpdateWindowPositions();
+    void UpdateWindowPositions(HWND skipWindow = nullptr);
+
+    // Dynamic grid resize. Frames are visible window frames in screen coordinates.
+    bool SupportsEdgeResize() const noexcept { return m_baseGrid.has_value(); }
+    EdgeResizeResult ApplyEdgeResize(const ZoneIndexSet& zones, const RECT& currentFrame, const FancyZonesDividers::MovedEdges& moved, HWND skipWindow);
+    void FinishEdgeResize(const ZoneIndexSet& zones, const RECT& finalFrame, const FancyZonesDividers::MovedEdges& moved);
+    void ShowResizeCue(HWND draggedWindow, bool atBase);
 
     bool Snap(HWND window, const ZoneIndexSet& zones, bool updatePosition = true);
     bool Unsnap(HWND window);
@@ -77,6 +90,7 @@ private:
     const FancyZonesDataTypes::WorkAreaId m_uniqueId;
     HWND m_window{}; // Hidden tool window used to represent current monitor desktop work area.
     std::unique_ptr<Layout> m_layout;
+    std::optional<FancyZonesDataTypes::GridLayoutInfo> m_baseGrid; // set when the applied layout is grid-based
     LayoutAssignedWindows m_layoutWindows{};
     std::unique_ptr<ZonesOverlay> m_zonesOverlay;
 };

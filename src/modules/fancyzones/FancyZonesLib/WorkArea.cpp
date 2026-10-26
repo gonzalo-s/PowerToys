@@ -8,6 +8,7 @@
 #include "FancyZonesData/CustomLayouts.h"
 #include "ZonesOverlay.h"
 #include "Settings.h"
+#include "WorkingLayouts.h"
 #include <FancyZonesLib/FancyZonesWindowProperties.h>
 #include <FancyZonesLib/VirtualDesktop.h>
 #include <FancyZonesLib/WindowUtils.h>
@@ -99,6 +100,12 @@ namespace
     };
 
     WindowPool windowPool;
+}
+
+namespace
+{
+    constexpr int MinTrackPx = 90; // no zone may become narrower/shorter than this while resizing
+    constexpr int SnapRadiusPx = 8; // distance from a base gridline at which a divider snaps back to it
 }
 
 WorkArea::WorkArea(HINSTANCE hinstance, const FancyZonesDataTypes::WorkAreaId& uniqueId, const FancyZonesUtils::Rect& workAreaRect) :
@@ -256,11 +263,16 @@ void WorkArea::InitLayout()
     }
 }
 
-void WorkArea::UpdateWindowPositions()
+void WorkArea::UpdateWindowPositions(HWND skipWindow)
 {
     const auto& snappedWindows = m_layoutWindows.SnappedWindows();
     for (const auto& [window, zones] : snappedWindows)
     {
+        if (window == skipWindow)
+        {
+            continue;
+        }
+
         Snap(window, zones, true);
     }
 }
@@ -268,6 +280,120 @@ void WorkArea::UpdateWindowPositions()
 void WorkArea::CycleWindows(HWND window, bool reverse)
 {
     m_layoutWindows.CycleWindows(window, reverse);
+}
+
+EdgeResizeResult WorkArea::ApplyEdgeResize(const ZoneIndexSet& zones, const RECT& currentFrame, const FancyZonesDividers::MovedEdges& moved, HWND skipWindow)
+{
+    using namespace FancyZonesDividers;
+
+    EdgeResizeResult result;
+    if (!m_layout || !m_baseGrid)
+    {
+        return result;
+    }
+
+    auto& model = WorkingLayouts::instance().GetOrCreate(m_uniqueId, m_layout->Id(), *m_baseGrid);
+    const auto span = model.SpanOf(zones);
+    if (!span)
+    {
+        return result;
+    }
+
+    const auto dividers = model.DividersFor(*span, moved);
+    if (dividers.empty())
+    {
+        return result;
+    }
+
+    const int halfSpacing = m_layout->Spacing() / 2;
+    for (const auto& divider : dividers)
+    {
+        const bool column = divider.axis == Axis::Column;
+        const long total = column ? m_workAreaRect.width() : m_workAreaRect.height();
+        if (total <= 0)
+        {
+            continue;
+        }
+
+        // Boundary between two zones = window edge +/- half the spacing between zones.
+        long edge;
+        if (column)
+        {
+            edge = divider.index == span->firstCol ? currentFrame.left - halfSpacing : currentFrame.right + halfSpacing;
+            edge -= m_workAreaRect.left();
+        }
+        else
+        {
+            edge = divider.index == span->firstRow ? currentFrame.top - halfSpacing : currentFrame.bottom + halfSpacing;
+            edge -= m_workAreaRect.top();
+        }
+
+        const int position = static_cast<int>(static_cast<long long>(edge) * TotalUnits / total);
+        const int minTrack = static_cast<int>(static_cast<long long>(MinTrackPx) * TotalUnits / total);
+        const int snapRadius = static_cast<int>(static_cast<long long>(SnapRadiusPx) * TotalUnits / total);
+
+        result.changed |= model.Move(divider, position, minTrack, snapRadius);
+        result.atBase &= !model.IsModified(divider);
+    }
+
+    if (result.changed)
+    {
+        if (m_layout->InitFromGrid(m_workAreaRect, model.Current()))
+        {
+            UpdateWindowPositions(skipWindow);
+        }
+        else
+        {
+            // Should not happen (percents always sum to the total); fall back to the base layout.
+            Logger::error(L"Working layout produced invalid zones, resetting to the base layout");
+            WorkingLayouts::instance().Remove(m_uniqueId);
+            CalculateZoneSet();
+            UpdateWindowPositions(skipWindow);
+            result.atBase = true;
+        }
+    }
+
+    return result;
+}
+
+void WorkArea::FinishEdgeResize(const ZoneIndexSet& zones, const RECT& finalFrame, const FancyZonesDividers::MovedEdges& moved)
+{
+    ApplyEdgeResize(zones, finalFrame, moved, nullptr);
+
+    if (m_layout && m_baseGrid)
+    {
+        const auto* model = WorkingLayouts::instance().Find(m_uniqueId, m_layout->Id(), *m_baseGrid);
+        if (model && !model->IsModified())
+        {
+            WorkingLayouts::instance().Remove(m_uniqueId);
+            CalculateZoneSet();
+        }
+    }
+
+    // Final pass: put every snapped window, including the dragged one, exactly into its zone.
+    UpdateWindowPositions();
+}
+
+void WorkArea::ShowResizeCue(HWND draggedWindow, bool atBase)
+{
+    if (!m_layout || !m_baseGrid || !m_zonesOverlay)
+    {
+        return;
+    }
+
+    // Only the zone borders are drawn (fill opacity 0): the outlines of the base layout are its gridlines.
+    const Colors::ZoneColors cue{
+        .primaryColor = 0,
+        .borderColor = atBase ? RGB(102, 204, 102) : RGB(90, 160, 255),
+        .highlightColor = 0,
+        .numberColor = 0,
+        .highlightOpacity = 0,
+    };
+
+    const auto baseZones = LayoutConfigurator::GridZones(m_workAreaRect, *m_baseGrid, m_layout->Spacing());
+    SetWorkAreaWindowAsTopmost(draggedWindow);
+    m_zonesOverlay->DrawActiveZoneSet(baseZones, {}, cue, false);
+    m_zonesOverlay->Show();
 }
 
 #pragma region private
@@ -368,6 +494,17 @@ void WorkArea::CalculateZoneSet()
     }
 
     m_layout = std::make_unique<Layout>(appliedLayout.value());
+    m_baseGrid = LayoutConfigurator::GridInfo(appliedLayout.value());
+
+    if (m_baseGrid)
+    {
+        const auto* working = WorkingLayouts::instance().Find(m_uniqueId, m_layout->Id(), *m_baseGrid);
+        if (working && m_layout->InitFromGrid(m_workAreaRect, working->Current()))
+        {
+            return;
+        }
+    }
+
     m_layout->Init(m_workAreaRect, m_uniqueId.monitorId.monitor);
 }
 
