@@ -17,6 +17,12 @@ public:
     // this layout's spacing. Returns false and leaves the zones untouched on an empty work area, a zone-count mismatch
     // or an invalid zone.
     bool InitFromRects(const FancyZonesUtils::Rect& workAreaRect, const FancyZonesZoneRects::UnitRects& rects) noexcept;
+    // Zones of the given zone rectangles (units of 1/10000 of the work area) with the grid pixel maths of
+    // LayoutConfigurator (floor, spacing inset of spacing/2 between zones and spacing at the work-area border).
+    // nullopt on an empty work area, a zone-count mismatch or an invalid zone.
+    static std::optional<ZonesMap> ZonesFromRects(const FancyZonesUtils::Rect& workArea, const FancyZonesZoneRects::UnitRects& rects, int spacing, size_t expectedZoneCount) noexcept;
+    // Bounding rect of the given zones of any zone map; unknown ids are skipped, an empty rect when none is known.
+    static RECT CombinedRect(const ZonesMap& zones, const ZoneIndexSet& indices) noexcept;
     int Spacing() const noexcept;
 
     GUID Id() const noexcept;

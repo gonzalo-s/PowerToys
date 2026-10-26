@@ -186,23 +186,39 @@ namespace
 
 bool Layout::InitFromRects(const FancyZonesUtils::Rect& workArea, const FancyZonesZoneRects::UnitRects& rects) noexcept
 {
+    if (m_data.zoneCount < 0)
+    {
+        return false;
+    }
+
+    auto zones = ZonesFromRects(workArea, rects, Spacing(), static_cast<size_t>(m_data.zoneCount));
+    if (!zones)
+    {
+        return false;
+    }
+
+    m_zones = std::move(*zones);
+    return true;
+}
+
+std::optional<ZonesMap> Layout::ZonesFromRects(const FancyZonesUtils::Rect& workArea, const FancyZonesZoneRects::UnitRects& rects, int spacing, size_t expectedZoneCount) noexcept
+{
     using FancyZonesZoneRects::TotalUnits;
 
     if (workArea.width() == 0 || workArea.height() == 0)
     {
         Logger::error(L"Layout rects initialization: invalid work area");
-        return false;
+        return std::nullopt;
     }
 
-    if (m_data.zoneCount < 0 || rects.size() != static_cast<size_t>(m_data.zoneCount))
+    if (rects.size() != expectedZoneCount)
     {
-        return false;
+        return std::nullopt;
     }
 
     // Same pixel maths and spacing inset as CalculateGridZones (LayoutConfigurator.cpp).
     const long long width = workArea.width();
     const long long height = workArea.height();
-    const int spacing = Spacing();
     ZonesMap zones;
     for (const auto& [id, rect] : rects)
     {
@@ -220,14 +236,44 @@ bool Layout::InitFromRects(const FancyZonesUtils::Rect& workArea, const FancyZon
         if (!zone.IsValid())
         {
             Logger::error(L"Layout rects initialization: invalid zone");
-            return false;
+            return std::nullopt;
         }
 
         zones.insert({ id, zone });
     }
 
-    m_zones = std::move(zones);
-    return true;
+    return zones;
+}
+
+RECT Layout::CombinedRect(const ZonesMap& zones, const ZoneIndexSet& indices) noexcept
+{
+    RECT size{};
+    bool sizeEmpty = true;
+
+    for (ZoneIndex id : indices)
+    {
+        const auto it = zones.find(id);
+        if (it == zones.end())
+        {
+            continue;
+        }
+
+        const RECT newSize = it->second.GetZoneRect();
+        if (!sizeEmpty)
+        {
+            size.left = (std::min)(size.left, newSize.left);
+            size.top = (std::min)(size.top, newSize.top);
+            size.right = (std::max)(size.right, newSize.right);
+            size.bottom = (std::max)(size.bottom, newSize.bottom);
+        }
+        else
+        {
+            size = newSize;
+            sizeEmpty = false;
+        }
+    }
+
+    return size;
 }
 
 int Layout::Spacing() const noexcept
@@ -383,29 +429,5 @@ ZoneIndexSet Layout::GetCombinedZoneRange(const ZoneIndexSet& initialZones, cons
 
 RECT Layout::GetCombinedZonesRect(const ZoneIndexSet& zones)
 {
-    RECT size{};
-    bool sizeEmpty = true;
-
-    for (ZoneIndex id : zones)
-    {
-        if (m_zones.contains(id))
-        {
-            const auto& zone = m_zones.at(id);
-            const RECT newSize = zone.GetZoneRect();
-            if (!sizeEmpty)
-            {
-                size.left = min(size.left, newSize.left);
-                size.top = min(size.top, newSize.top);
-                size.right = max(size.right, newSize.right);
-                size.bottom = max(size.bottom, newSize.bottom);
-            }
-            else
-            {
-                size = newSize;
-                sizeEmpty = false;
-            }
-        }
-    }
-
-    return size;
+    return CombinedRect(m_zones, zones);
 }
