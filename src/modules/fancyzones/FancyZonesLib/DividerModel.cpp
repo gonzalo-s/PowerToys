@@ -115,12 +115,12 @@ namespace FancyZonesDividers
 
     int DividerModel::Position(Divider divider) const noexcept
     {
-        return EdgeOf(Tracks(m_current, divider.axis), divider.index);
+        return IsValid(m_current, divider) ? EdgeOf(Tracks(m_current, divider.axis), divider.index) : 0;
     }
 
     int DividerModel::BasePosition(Divider divider) const noexcept
     {
-        return EdgeOf(Tracks(m_base, divider.axis), divider.index);
+        return IsValid(m_base, divider) ? EdgeOf(Tracks(m_base, divider.axis), divider.index) : 0;
     }
 
     bool DividerModel::IsModified(Divider divider) const noexcept
@@ -150,19 +150,25 @@ namespace FancyZonesDividers
             position = basePosition;
         }
 
-        const int low = previous + minTrack;
-        const int high = next - minTrack;
+        // Per-side effective minimum: a track that is already smaller than minTrack may grow but never
+        // shrinks further, and it does not force the divider to jump. With these minimums low <= high always
+        // holds (the current position lies between them).
+        const size_t nextTrack = static_cast<size_t>(divider.index);
+        const size_t prevTrack = nextTrack - 1;
+        const int effectiveMin = (std::max)(minTrack, 0);
+        const int lowMin = (std::min)(effectiveMin, tracks[prevTrack]);
+        const int highMin = (std::min)(effectiveMin, tracks[nextTrack]);
+        const int low = previous + lowMin;
+        const int high = next - highMin;
         if (low > high)
         {
-            return false;
+            return false; // defensive only: cannot happen with non-negative tracks
         }
 
         position = std::clamp(position, low, high);
 
         const int before = position - previous;
         const int after = next - position;
-        const size_t nextTrack = static_cast<size_t>(divider.index);
-        const size_t prevTrack = nextTrack - 1;
         if (tracks[prevTrack] == before && tracks[nextTrack] == after)
         {
             return false;

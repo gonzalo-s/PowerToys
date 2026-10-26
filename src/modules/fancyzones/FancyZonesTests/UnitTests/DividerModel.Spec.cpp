@@ -160,6 +160,59 @@ namespace FancyZonesUnitTests
             Assert::IsFalse(model.Move({ Axis::Row, 5 }, 100, 500, 0));
         }
 
+        TEST_METHOD (SmallTrackCanGrowButNotShrink)
+        {
+            // track 0 (500) is already below the minimum track (1000)
+            DividerModel model(MakeGrid({ 10000 }, { 500, 9500 }, { { 0, 1 } }));
+
+            // shrinking it further is clamped at its current size: no jump up to the minimum
+            Assert::IsFalse(model.Move({ Axis::Column, 1 }, 300, 1000, 0));
+            Assert::AreEqual(500, model.Current().columnsPercents()[0]);
+
+            // growing is allowed
+            Assert::IsTrue(model.Move({ Axis::Column, 1 }, 2000, 1000, 0));
+            Assert::AreEqual(2000, model.Current().columnsPercents()[0]);
+            Assert::AreEqual(8000, model.Current().columnsPercents()[1]);
+
+            // the other (large) track clamps normally at the minimum
+            Assert::IsTrue(model.Move({ Axis::Column, 1 }, 9800, 1000, 0));
+            Assert::AreEqual(9000, model.Current().columnsPercents()[0]);
+            Assert::AreEqual(1000, model.Current().columnsPercents()[1]);
+        }
+
+        TEST_METHOD (MoveAllowedWhenBothTracksAreBelowTwiceTheMinimum)
+        {
+            // tracks 500 + 1400 < 2 * 1000: low (previous + min) used to exceed high (next - min) and block the move
+            DividerModel model(MakeGrid({ 10000 }, { 500, 1400, 8100 }, { { 0, 1, 2 } }));
+            Assert::IsTrue(model.Move({ Axis::Column, 1 }, 800, 1000, 0));
+            Assert::AreEqual(800, model.Current().columnsPercents()[0]);
+            Assert::AreEqual(1100, model.Current().columnsPercents()[1]);
+            Assert::AreEqual(8100, model.Current().columnsPercents()[2]);
+
+            // the right track (1100) may not shrink below the minimum (1000)
+            Assert::IsTrue(model.Move({ Axis::Column, 1 }, 1500, 1000, 0));
+            Assert::AreEqual(900, model.Current().columnsPercents()[0]);
+            Assert::AreEqual(1000, model.Current().columnsPercents()[1]);
+        }
+
+        TEST_METHOD (NegativeMinimumTrackIsTreatedAsZero)
+        {
+            DividerModel model(Grid2x2());
+            Assert::IsTrue(model.Move({ Axis::Column, 1 }, -500, -100, 0));
+            Assert::AreEqual(0, model.Current().columnsPercents()[0]);
+            Assert::AreEqual(10000, model.Current().columnsPercents()[1]);
+        }
+
+        TEST_METHOD (PositionGuardsInvalidDivider)
+        {
+            DividerModel model(Grid2x2());
+            Assert::AreEqual(0, model.Position({ Axis::Column, 5 }));
+            Assert::AreEqual(0, model.Position({ Axis::Row, -1 }));
+            Assert::AreEqual(0, model.BasePosition({ Axis::Column, 5 }));
+            Assert::AreEqual(0, model.BasePosition({ Axis::Row, -1 }));
+            Assert::AreEqual(5000, model.BasePosition({ Axis::Row, 1 }));
+        }
+
         TEST_METHOD (SameBaseDetectsChanges)
         {
             DividerModel model(Grid2x2());

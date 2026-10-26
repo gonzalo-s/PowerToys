@@ -65,6 +65,7 @@ namespace FancyZonesDividers
         const FancyZonesDataTypes::GridLayoutInfo& Current() const noexcept { return m_current; }
 
         // True when other has the same rows, columns, percents and cellChildMap as the base grid.
+        // Spacing, showSpacing and sensitivity radius are ignored on purpose.
         bool SameBase(const FancyZonesDataTypes::GridLayoutInfo& other) const noexcept;
 
         // Bounding rows/columns of the given zones; nullopt when none of them is in the grid.
@@ -73,13 +74,15 @@ namespace FancyZonesDividers
         // Dividers on the inner sides of span that correspond to the moved edges. Outer (work area) sides are skipped.
         std::vector<Divider> DividersFor(const Span& span, const MovedEdges& moved) const;
 
+        // Position of the divider in units; 0 for an invalid divider index.
         int Position(Divider divider) const noexcept;
         int BasePosition(Divider divider) const noexcept;
         bool IsModified(Divider divider) const noexcept;
         bool IsModified() const noexcept;
 
-        // Moves the whole divider line to position (clamped so both neighbouring tracks stay >= minTrack,
-        // snapped to the base position when within snapRadius). Returns true when the grid changed.
+        // Moves the whole divider line to position (snapped to the base position when within snapRadius, then
+        // clamped so both neighbouring tracks stay >= minTrack; a track already smaller than minTrack may only grow).
+        // A negative minTrack is treated as 0. Returns true when the grid changed.
         bool Move(Divider divider, int position, int minTrack, int snapRadius);
 
     private:
