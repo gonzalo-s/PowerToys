@@ -527,6 +527,14 @@ namespace FancyZonesUnitTests
             }
         }
 
+        // Test-only full reset between two drags (what the removed WorkArea::ResetWorkingLayout did): drop the working
+        // entry and rebuild the zones from the base layout; the assigned windows stay.
+        void ClearWorkingLayout()
+        {
+            WorkingLayouts::instance().Clear();
+            m_workArea->InitLayout();
+        }
+
         TEST_METHOD_CLEANUP(CleanUp) noexcept
         {
             m_workArea.reset();
@@ -922,21 +930,114 @@ namespace FancyZonesUnitTests
             }
         }
 
-        TEST_METHOD (ResetWorkingLayoutRestoresBaseZones)
-        {
-            // no working layout: nothing happens
-            m_workArea->ResetWorkingLayout();
-            Assert::AreEqual(960L, m_workArea->GetActiveZones().at(0).GetZoneRect().right);
+        // ---- User snap (wave 9): only the windows that conflict with the snapped zones go back to their base rects ----
 
+        TEST_METHOD (PrepareUserSnapWithoutWorkingLayoutDoesNothing)
+        {
+            m_workArea->PrepareUserSnap(Mocks::Window(), { 1 });
+            Assert::IsNull(WorkingLayouts::instance().Find(m_workAreaId, m_workArea->GetLayoutId(), BaseRects()));
+            Assert::AreEqual(960L, m_workArea->GetActiveZones().at(0).GetZoneRect().right);
+            Assert::AreEqual(960L, m_workArea->GetActiveZones().at(1).GetZoneRect().left);
+        }
+
+        TEST_METHOD (PrepareUserSnapOnAConflictingDividerRestoresTheBaseLayout)
+        {
+            // Grid 4 (2 x 2), every zone occupied: zone 0's right edge to 1160 (zone 1's left follows)
             m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 1160, 540 }, Right(), nullptr);
             m_workArea->FinishEdgeResize({ 0 }, RECT{ 0, 0, 1160, 540 }, Right());
             Assert::AreEqual(1160L, m_workArea->GetActiveZones().at(0).GetZoneRect().right);
 
-            m_workArea->ResetWorkingLayout();
-            Assert::IsNull(WorkingLayouts::instance().Find(m_workAreaId, m_workArea->GetLayoutId(), BaseRects()));
+            // a new window into zone 0: zone 0 goes back to 0..960; zone 1's current rect (1160..1920) does not overlap
+            // 0..960, so it keeps its resized position (no conflict) and the entry stays (replaces the wave 5 test
+            // ResetWorkingLayoutRestoresBaseZones, where both zones went back at once).
+            m_workArea->PrepareUserSnap(Mocks::Window(), { 0 });
             Assert::AreEqual(960L, m_workArea->GetActiveZones().at(0).GetZoneRect().right);
+            Assert::AreEqual(1160L, m_workArea->GetActiveZones().at(1).GetZoneRect().left);
+            Assert::IsNotNull(WorkingLayouts::instance().Find(m_workAreaId, m_workArea->GetLayoutId(), BaseRects()));
+
+            // a new window into zone 1 (base 960..1920): zone 1 itself resets; nothing is modified any more: entry removed
+            m_workArea->PrepareUserSnap(Mocks::Window(), { 1 });
             Assert::AreEqual(960L, m_workArea->GetActiveZones().at(1).GetZoneRect().left);
+            Assert::IsNull(WorkingLayouts::instance().Find(m_workAreaId, m_workArea->GetLayoutId(), BaseRects()));
+            // the layout itself never changed
             Assert::AreEqual(960L, m_workArea->GetLayout()->Zones().at(0).GetZoneRect().right);
+        }
+
+        TEST_METHOD (PrepareUserSnapFarFromTwoExpandedWindowsKeepsBoth)
+        {
+            // Columns 5 (384 px each on 1920), windows in zones 0 and 4 only: zone 0's right edge to 600, zone 4's left
+            // edge to 1320 (both far from every original line)
+            using FancyZonesZoneRects::Side;
+            RecreateWorkArea(FancyZonesDataTypes::ZoneSetLayoutType::Columns, 5, 0, 1920, 1080, false);
+            OccupyZones({ 0, 4 });
+            DragSideTo(0, Side::Right, 600, true);
+            DragSideTo(4, Side::Left, 1320, true);
+            Assert::AreEqual(600L, ActiveRect(0).right);
+            Assert::AreEqual(1320L, ActiveRect(4).left);
+
+            // a new window into zone 2 (768..1152) overlaps neither: nothing moves
+            m_workArea->PrepareUserSnap(Mocks::Window(), { 2 });
+            Assert::AreEqual(600L, ActiveRect(0).right);
+            Assert::AreEqual(1320L, ActiveRect(4).left);
+            Assert::AreEqual(768L, ActiveRect(2).left);
+            Assert::AreEqual(1152L, ActiveRect(2).right);
+            Assert::IsNotNull(WorkingLayouts::instance().Find(m_workAreaId, m_workArea->GetLayoutId(), BaseRects()));
+        }
+
+        TEST_METHOD (PrepareUserSnapResetsOnlyTheConflictingWindow)
+        {
+            // The user's report: Columns 4 (480 px each), windows in zones 0 and 3 expanded to 768 (40 %) and from
+            // 1152 (60 %).
+            using FancyZonesZoneRects::Side;
+            RecreateWorkArea(FancyZonesDataTypes::ZoneSetLayoutType::Columns, 4, 0, 1920, 1080, false);
+            OccupyZones({ 0, 3 });
+            DragSideTo(0, Side::Right, 768, true);
+            DragSideTo(3, Side::Left, 1152, true);
+            Assert::AreEqual(768L, ActiveRect(0).right);
+            Assert::AreEqual(1152L, ActiveRect(3).left);
+
+            // a new window into zone 1 (480..960) overlaps zone 0 (0..768) only: zone 0 resets, zone 3 keeps its size
+            const HWND first = Mocks::Window();
+            m_workArea->PrepareUserSnap(first, { 1 });
+            Assert::AreEqual(480L, ActiveRect(0).right);
+            Assert::AreEqual(480L, ActiveRect(1).left);
+            Assert::AreEqual(960L, ActiveRect(1).right);
+            Assert::AreEqual(1152L, ActiveRect(3).left);
+            Assert::IsNotNull(WorkingLayouts::instance().Find(m_workAreaId, m_workArea->GetLayoutId(), BaseRects()));
+            m_workArea->Snap(first, { 1 }, false);
+
+            // another new window into zone 2 (960..1440) overlaps zone 3 (1152..1920): zone 3 resets; everything is
+            // back to the base layout, so the entry is removed
+            m_workArea->PrepareUserSnap(Mocks::Window(), { 2 });
+            Assert::AreEqual(1440L, ActiveRect(3).left);
+            Assert::AreEqual(480L, ActiveRect(0).right);
+            Assert::AreEqual(960L, ActiveRect(2).left);
+            Assert::AreEqual(1440L, ActiveRect(2).right);
+            Assert::IsNull(WorkingLayouts::instance().Find(m_workAreaId, m_workArea->GetLayoutId(), BaseRects()));
+        }
+
+        TEST_METHOD (PrepareUserSnapIgnoresTheSnappedWindowsOwnZones)
+        {
+            // Columns 4, one window in zone 0 expanded to 768
+            using FancyZonesZoneRects::Side;
+            RecreateWorkArea(FancyZonesDataTypes::ZoneSetLayoutType::Columns, 4, 0, 1920, 1080, false);
+            const HWND window = Mocks::Window();
+            m_workArea->Snap(window, { 0 }, false);
+            DragSideTo(0, Side::Right, 768, true);
+            Assert::AreEqual(768L, ActiveRect(0).right);
+
+            // the same window moves to zone 1 (e.g. Win+Right): it does not conflict with itself, so its old zone keeps
+            // its rect (nobody is there any more) and zone 1 is at its base rect
+            m_workArea->PrepareUserSnap(window, { 1 });
+            Assert::AreEqual(768L, ActiveRect(0).right);
+            Assert::AreEqual(480L, ActiveRect(1).left);
+            Assert::AreEqual(960L, ActiveRect(1).right);
+            Assert::IsNotNull(WorkingLayouts::instance().Find(m_workAreaId, m_workArea->GetLayoutId(), BaseRects()));
+
+            // another window into zone 1 while the first one is still in zone 0: zone 0 conflicts and resets
+            m_workArea->PrepareUserSnap(Mocks::Window(), { 1 });
+            Assert::AreEqual(480L, ActiveRect(0).right);
+            Assert::IsNull(WorkingLayouts::instance().Find(m_workAreaId, m_workArea->GetLayoutId(), BaseRects()));
         }
 
         TEST_METHOD (SnapRadiusIs20Px)
@@ -1287,7 +1388,7 @@ namespace FancyZonesUnitTests
         // ambiguous 20..21 px band of a gridline (not asserted).
         bool CheckRelease(const SweepCase& c, bool single, int spacing, long length, long p, bool releaseAlsoLive)
         {
-            m_workArea->ResetWorkingLayout();
+            ClearWorkingLayout();
             const int minUnits = MinUnits(length);
             const bool high = IsHighSide(c.side);
             const auto limits = LimitUnits(c, single, minUnits);
@@ -1399,7 +1500,7 @@ namespace FancyZonesUnitTests
             Assert::AreEqual(1440L, ActiveRect(3).left);
 
             // 1400 px is 40 px from the 1440 line and 440 px from 960: exactly where released
-            m_workArea->ResetWorkingLayout();
+            ClearWorkingLayout();
             DragSideTo(0, Side::Right, 1400, false);
             Assert::AreEqual(1400L, ActiveRect(0).right);
             Assert::AreEqual(480L, ActiveRect(1).left);
@@ -1423,7 +1524,7 @@ namespace FancyZonesUnitTests
             OccupyZones({ 0 });
             DragSideTo(0, Side::Right, 1920, true);
             Assert::AreEqual(1920L, ActiveRect(0).right);
-            m_workArea->ResetWorkingLayout();
+            ClearWorkingLayout();
             DragSideTo(0, Side::Right, 1930, false);
             Assert::AreEqual(1920L, ActiveRect(0).right);
 
@@ -1432,7 +1533,7 @@ namespace FancyZonesUnitTests
             OccupyZones({ 3 });
             DragSideTo(3, Side::Left, 0, true);
             Assert::AreEqual(0L, ActiveRect(3).left);
-            m_workArea->ResetWorkingLayout();
+            ClearWorkingLayout();
             DragSideTo(3, Side::Left, -10, false);
             Assert::AreEqual(0L, ActiveRect(3).left);
 
@@ -1441,7 +1542,7 @@ namespace FancyZonesUnitTests
             OccupyZones({ 0 });
             DragSideTo(0, Side::Bottom, 1080, true);
             Assert::AreEqual(1080L, ActiveRect(0).bottom);
-            m_workArea->ResetWorkingLayout();
+            ClearWorkingLayout();
             DragSideTo(0, Side::Bottom, 1090, false);
             Assert::AreEqual(1080L, ActiveRect(0).bottom);
 
@@ -1449,7 +1550,7 @@ namespace FancyZonesUnitTests
             OccupyZones({ 1 });
             DragSideTo(1, Side::Top, 0, true);
             Assert::AreEqual(0L, ActiveRect(1).top);
-            m_workArea->ResetWorkingLayout();
+            ClearWorkingLayout();
             DragSideTo(1, Side::Top, -10, false);
             Assert::AreEqual(0L, ActiveRect(1).top);
         }

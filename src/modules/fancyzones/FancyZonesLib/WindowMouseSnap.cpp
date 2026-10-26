@@ -129,8 +129,9 @@ void WindowMouseSnap::MoveSizeEnd()
             const auto& zones = m_highlightedZones.Zones();
             if (!zones.empty())
             {
-                // User-initiated snap: back to the original layout (the dragged window is placed by Snap)
-                m_currentWorkArea->ResetWorkingLayout(m_window);
+                // User-initiated snap: the target zones and the windows that conflict with them go back to their
+                // original rects; the other windows keep their sizes (the dragged window is placed by Snap)
+                m_currentWorkArea->PrepareUserSnap(m_window, zones);
             }
 
             m_currentWorkArea->Snap(m_window, zones);

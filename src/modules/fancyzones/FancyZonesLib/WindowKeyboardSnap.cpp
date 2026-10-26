@@ -12,11 +12,11 @@
 
 namespace
 {
-    // User-initiated snap: the working (resized) layout of the work area is reset first, so the window lands on its
-    // original zone rect and the other snapped windows return to theirs.
+    // User-initiated snap: the target zones go back to their original rects first (so the window lands on its
+    // original zone rect), together with the windows that conflict with them; the other windows keep their sizes.
     bool SnapToOriginalZones(WorkArea* workArea, HWND window, const ZoneIndexSet& zones)
     {
-        workArea->ResetWorkingLayout(window);
+        workArea->PrepareUserSnap(window, zones);
         return workArea->Snap(window, zones);
     }
 }

@@ -753,22 +753,67 @@ void WorkArea::DiscardUnmodifiedWorkingLayout()
     }
 }
 
-void WorkArea::ResetWorkingLayout(HWND skipWindow)
+void WorkArea::PrepareUserSnap(HWND window, const ZoneIndexSet& zones)
 {
-    if (!m_layout)
+    if (!m_layout || !m_baseRects || zones.empty())
     {
         return;
     }
 
-    const bool hasEntry = m_baseRects && WorkingLayouts::instance().Find(m_uniqueId, m_layout->Id(), *m_baseRects) != nullptr;
-    if (!hasEntry && m_workingZones.empty())
+    auto* model = WorkingLayouts::instance().Find(m_uniqueId, m_layout->Id(), *m_baseRects);
+    if (!model)
     {
         return;
     }
+
+    // The other snapped windows, each one as a unit (a window spanning several zones conflicts as a whole). The
+    // window being snapped does not occupy its old zones any more: it never conflicts with itself.
+    std::vector<ZoneIndexSet> windows;
+    for (const auto& [snapped, windowZones] : m_layoutWindows.SnappedWindows())
+    {
+        if (snapped != window && !windowZones.empty())
+        {
+            windows.push_back(windowZones);
+        }
+    }
+
+    const FancyZonesZoneRects::OccupiedFn occupied = [&windows](ZoneIndex id) {
+        return std::any_of(windows.begin(), windows.end(), [id](const ZoneIndexSet& windowZones) {
+            return std::find(windowZones.begin(), windowZones.end(), id) != windowZones.end();
+        });
+    };
 
     const ZonesMap previousZones = ActiveZones();
-    RemoveWorkingLayout();
-    RepositionSnappedWindows(skipWindow, &previousZones);
+    const auto changed = model->ResolveSnap(zones, occupied, windows);
+    Logger::info("User snap: window {}, zones {}: zones reset to their original rects: {}",
+                 static_cast<void*>(window), EdgeResizeLogText::Zones(zones), EdgeResizeLogText::Zones(changed));
+
+    if (!model->IsModified())
+    {
+        // Back to the base layout: drop the entry (as FinishEdgeResize does).
+        RemoveWorkingLayout();
+    }
+    else if (!changed.empty())
+    {
+        auto working = Layout::ZonesFromRects(m_workAreaRect, model->Current(), m_layout->Spacing(), m_layout->Zones().size());
+        if (working)
+        {
+            m_workingZones = std::move(*working);
+        }
+        else
+        {
+            // Should not happen (base rects are valid zones and the others are unchanged); fall back to the base layout.
+            Logger::error(L"Working layout produced invalid zones on a user snap, resetting to the base layout");
+            RemoveWorkingLayout();
+        }
+    }
+    else
+    {
+        return;
+    }
+
+    // Only the windows whose zones changed move; window is placed by the caller (Snap).
+    RepositionSnappedWindows(window, &previousZones);
 }
 
 const ZonesMap& WorkArea::ActiveZones() const noexcept

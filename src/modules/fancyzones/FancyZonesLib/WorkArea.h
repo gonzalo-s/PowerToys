@@ -123,9 +123,12 @@ public:
     // the layout's zones. GetLayout() always keeps the original layout (overlay, drop targets, keyboard snapping).
     const ZonesMap& GetActiveZones() const noexcept { return ActiveZones(); }
 
-    // User-initiated snap: drops the working layout of this work area and moves every snapped window (except
-    // skipWindow, which the caller is about to place) whose position differs back to its original zone rect.
-    void ResetWorkingLayout(HWND skipWindow = nullptr);
+    // User-initiated snap of window into zones (call it before Snap): those zones go back to their original rects in
+    // the working layout, and so do the windows that conflict with them (ZoneRectModel::ResolveSnap; window itself
+    // does not count as occupying its old zones). Every other window keeps its resized position. An entry that ends
+    // up equal to the base layout is removed. Only the windows whose zones changed are moved, except window, which
+    // the caller places with Snap. No working layout: nothing happens.
+    void PrepareUserSnap(HWND window, const ZoneIndexSet& zones);
 
     // Release rule of an edge resize: true when a side listed in sides differs by more than 1 px between the zone
     // rect and the released frame (the edge snapped or was clamped). Both rects in the same coordinate space.
