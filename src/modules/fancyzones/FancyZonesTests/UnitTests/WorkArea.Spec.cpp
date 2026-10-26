@@ -582,8 +582,20 @@ namespace FancyZonesUnitTests
         {
             m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 1900, 540 }, Right(), nullptr);
             const auto& zones = m_workArea->GetLayout()->Zones();
-            // the right zone keeps at least the minimum track size (90 px)
-            Assert::IsTrue(zones.at(1).GetZoneRect().right - zones.at(1).GetZoneRect().left >= 89);
+            // the right zone keeps at least the minimum track size: max(200 px, 10% of 1920) = 200 px
+            Assert::IsTrue(zones.at(1).GetZoneRect().right - zones.at(1).GetZoneRect().left >= 199);
+            Assert::IsTrue(zones.at(1).GetZoneRect().right - zones.at(1).GetZoneRect().left <= 201);
+        }
+
+        TEST_METHOD (MinimumZoneSizeScalesWithWorkArea)
+        {
+            // 10% of a 3840 px wide work area (384 px) is above the 200 px floor
+            m_workArea.reset();
+            m_workArea = WorkArea::Create({}, m_workAreaId, {}, FancyZonesUtils::Rect(RECT(0, 0, 3840, 2160)));
+            m_workArea->ApplyEdgeResize({ 0 }, RECT{ 0, 0, 3800, 1080 }, Right(), nullptr);
+            const auto& zones = m_workArea->GetLayout()->Zones();
+            const long width = zones.at(1).GetZoneRect().right - zones.at(1).GetZoneRect().left;
+            Assert::IsTrue(width >= 383 && width <= 385);
         }
 
         TEST_METHOD (FinishRemovesEntryWhenBackAtBase)

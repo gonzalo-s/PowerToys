@@ -64,6 +64,10 @@ public:
     void DiscardUnmodifiedWorkingLayout();
     void ShowResizeCue(HWND draggedWindow, bool atBase);
 
+    // Moves every snapped window (except skipWindow) into its zones with a single async SetWindowPos.
+    // Skips hidden, minimized, maximized and cloaked windows. Safe for the live resize path.
+    void RepositionSnappedWindows(HWND skipWindow = nullptr);
+
     bool Snap(HWND window, const ZoneIndexSet& zones, bool updatePosition = true);
     bool Unsnap(HWND window);
 
@@ -80,6 +84,7 @@ protected:
 
 private:
     bool InitWindow(HINSTANCE hinstance);
+    EdgeResizeResult ApplyEdgeResizeInternal(const ZoneIndexSet& zones, const RECT& currentFrame, const FancyZonesDividers::MovedEdges& moved, HWND skipWindow, bool reposition);
     void InitLayout(const FancyZonesDataTypes::WorkAreaId& parentUniqueId);
     
     void CalculateZoneSet();
