@@ -392,7 +392,7 @@ bool WorkArea::ZonesRectChanged(const ZonesMap& before, const ZonesMap& after, c
     return EqualRect(&*beforeRect, &*afterRect) == FALSE;
 }
 
-void WorkArea::RepositionSnappedWindows(HWND skipWindow, const ZonesMap* previousZones)
+void WorkArea::RepositionSnappedWindows(HWND skipWindow, const ZonesMap* previousZones, std::map<HWND, RECT>* requestedRects)
 {
     // Lightweight live-resize path (called up to ~60 Hz): only moves windows. Unlike Snap it does not restore
     // minimized/maximized windows, write app-zone history, reassign windows or touch window properties.
@@ -417,11 +417,11 @@ void WorkArea::RepositionSnappedWindows(HWND skipWindow, const ZonesMap* previou
             continue;
         }
 
-        RepositionWindow(window, zones);
+        RepositionWindow(window, zones, requestedRects);
     }
 }
 
-void WorkArea::RepositionWindow(HWND window, const ZoneIndexSet& zones)
+void WorkArea::RepositionWindow(HWND window, const ZoneIndexSet& zones, std::map<HWND, RECT>* requestedRects)
 {
     if (!m_layout || !IsWindow(window) || !IsWindowVisible(window) || IsIconic(window) || IsZoomed(window))
     {
@@ -450,6 +450,42 @@ void WorkArea::RepositionWindow(HWND window, const ZoneIndexSet& zones)
     }
 
     SetWindowPos(window, nullptr, adjusted.left, adjusted.top, adjusted.right - adjusted.left, adjusted.bottom - adjusted.top, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS);
+    if (requestedRects)
+    {
+        (*requestedRects)[window] = adjusted;
+    }
+}
+
+void WorkArea::CheckRefusedNeighbours()
+{
+    // The neighbours were moved asynchronously (SWP_ASYNCWINDOWPOS) by the previous update: their actual rects are read
+    // now, one update later, without waiting. Diagnostics only: the model and the dragged edge are not changed.
+    constexpr long RefusedNeighbourTolerancePx = 2;
+    for (const auto& [window, requested] : m_neighbourTargets)
+    {
+        RECT actual{};
+        if (m_refusedNeighbours.contains(window) || !IsWindow(window) || !GetWindowRect(window, &actual))
+        {
+            continue;
+        }
+
+        const auto refused = FancyZonesZoneRects::RefusedSides(requested, actual, RefusedNeighbourTolerancePx);
+        if (refused.any())
+        {
+            m_refusedNeighbours.insert(window);
+            Logger::info("Edge resize: neighbour window {} is larger than requested on side(s) {}: requested {}, actual {}; it does not shrink "
+                         "further (e.g. the app's own minimum size), so the windows may overlap",
+                         static_cast<void*>(window), EdgeResizeLogText::Moved(refused), EdgeResizeLogText::Rect(requested), EdgeResizeLogText::Rect(actual));
+        }
+    }
+
+    m_neighbourTargets.clear();
+}
+
+void WorkArea::ClearNeighbourTargets() noexcept
+{
+    m_neighbourTargets.clear();
+    m_refusedNeighbours.clear();
 }
 
 EdgeResizeResult WorkArea::ApplyEdgeResize(const ZoneIndexSet& zones, const RECT& currentFrame, const FancyZonesZoneRects::MovedEdges& moved, HWND skipWindow)
@@ -460,6 +496,11 @@ EdgeResizeResult WorkArea::ApplyEdgeResize(const ZoneIndexSet& zones, const RECT
 EdgeResizeResult WorkArea::ApplyEdgeResizeInternal(const ZoneIndexSet& zones, const RECT& currentFrame, const FancyZonesZoneRects::MovedEdges& moved, HWND skipWindow, bool reposition)
 {
     using namespace FancyZonesZoneRects;
+
+    if (reposition)
+    {
+        CheckRefusedNeighbours();
+    }
 
     EdgeResizeResult result;
     result.clampedFrame = currentFrame;
@@ -544,6 +585,17 @@ EdgeResizeResult WorkArea::ApplyEdgeResizeInternal(const ZoneIndexSet& zones, co
     // Only zones holding a window take part; the dragged window's own zones always do (see ZoneRectModel::MoveEdge).
     const FancyZonesZoneRects::OccupiedFn occupied = [this](ZoneIndex id) { return !m_layoutWindows.IsZoneEmpty(id); };
 
+    // Every snapped window's zone set is one unit: a window spanning several zones is squeezed as a whole, its inner
+    // gridlines do not stop the dragged edge (see ZoneRectModel::MoveEdge).
+    std::vector<ZoneIndexSet> windows;
+    for (const auto& [window, windowZones] : m_layoutWindows.SnappedWindows())
+    {
+        if (!windowZones.empty())
+        {
+            windows.push_back(windowZones);
+        }
+    }
+
     for (const auto& dragged : sides)
     {
         if (!dragged.moved || dragged.length <= 0 || !model.HasNeighbour(zones, dragged.side))
@@ -555,7 +607,7 @@ EdgeResizeResult WorkArea::ApplyEdgeResizeInternal(const ZoneIndexSet& zones, co
         const int position = static_cast<int>(CeilDiv(static_cast<long long>(dragged.edge) * TotalUnits, dragged.length));
         const int minSize = static_cast<int>(static_cast<long long>(MinSizePx) * TotalUnits / dragged.length);
         const int snapRadius = static_cast<int>(static_cast<long long>(SnapRadiusPx) * TotalUnits / dragged.length);
-        const auto outcome = model.MoveEdge(zones, dragged.side, position, minSize, snapRadius, occupied);
+        const auto outcome = model.MoveEdge(zones, dragged.side, position, minSize, snapRadius, occupied, windows);
         if (outcome.result == MoveResult::Moved)
         {
             result.changed = true;
@@ -619,7 +671,7 @@ EdgeResizeResult WorkArea::ApplyEdgeResizeInternal(const ZoneIndexSet& zones, co
 
         if (reposition)
         {
-            RepositionSnappedWindows(skipWindow, &previousZones);
+            RepositionSnappedWindows(skipWindow, &previousZones, &m_neighbourTargets);
         }
     }
 
@@ -630,6 +682,9 @@ EdgeResizeResult WorkArea::ApplyEdgeResizeInternal(const ZoneIndexSet& zones, co
 
 void WorkArea::FinishEdgeResize(const ZoneIndexSet& zones, const RECT& finalFrame, const FancyZonesZoneRects::MovedEdges& moved, HWND draggedWindow)
 {
+    // The neighbours moved by the last live update: log one refusing its target, then end this drag's bookkeeping.
+    CheckRefusedNeighbours();
+    ClearNeighbourTargets();
     if (!m_layout)
     {
         return;
@@ -741,6 +796,7 @@ bool WorkArea::ReleasedEdgeNeedsPlacement(const RECT& zoneRect, const RECT& fram
 
 void WorkArea::DiscardUnmodifiedWorkingLayout()
 {
+    ClearNeighbourTargets();
     if (m_layout && m_baseRects)
     {
         const auto* model = WorkingLayouts::instance().Find(m_uniqueId, m_layout->Id(), *m_baseRects);

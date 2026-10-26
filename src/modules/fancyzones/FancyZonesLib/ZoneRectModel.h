@@ -57,6 +57,10 @@ namespace FancyZonesZoneRects
 
     MovedEdges DetectMovedEdges(const RECT& before, const RECT& after, long tolerance) noexcept;
 
+    // The sides on which a window's actual rect lies more than tolerance outside the rect it was asked to take (it is
+    // larger there: e.g. an app with a minimum width that refused to shrink). Sides where it is smaller do not count.
+    MovedEdges RefusedSides(const RECT& requested, const RECT& actual, long tolerance) noexcept;
+
     // Zone rectangles of a grid description, from its cumulative row/column boundaries (no spacing).
     UnitRects RectsFromGrid(const FancyZonesDataTypes::GridLayoutInfo& grid);
 
@@ -133,9 +137,17 @@ namespace FancyZonesZoneRects
         // and may end up covered. Expanding pushes every occupied zone overlapping the swept strip (its far side moves
         // to the target; zones sharing a pushed zone's old far side follow); contracting pulls the occupied zones on
         // the wall. Clamp: every moving zone keeps at least min(minSize, its current size, its base size) (negative
-        // minSize = 0); without a pushed zone an expanding side stops minSize before the work-area border. The outcome
-        // reports the snap only when the clamped position is the snapped line.
-        MoveOutcome MoveEdge(const ZoneIndexSet& zones, Side side, int position, int minSize, int snapRadius, const OccupiedFn& occupied = {});
+        // minSize = 0); an expanding side may reach the work-area border. The outcome reports the snap only when the
+        // clamped position is the snapped line.
+        // Multi-zone windows (units: the dragged block itself and every entry of windows) are squeezed as a whole: a
+        // squeezed zone (a pushed zone, or a dragged/pulled zone of a contracting side) that reaches its minimum pushes
+        // the zones of its own unit lying right behind it (their side on its far side, overlapping it along the wall),
+        // each keeping its own minimum, so the inner gridlines of a window are no limit; the limit is the window's far
+        // side (or another window right behind one of its zones) minus the minimums of its zones on the way. Only
+        // possible when every occupied zone right behind the squeezed zone shares a unit with it. Every zone of a
+        // pushed window that extends past the new wall position is pushed too (its bounding rect never overlaps the
+        // dragged block); a contracting side also moves the zones on the wall of a pulled zone's window.
+        MoveOutcome MoveEdge(const ZoneIndexSet& zones, Side side, int position, int minSize, int snapRadius, const OccupiedFn& occupied = {}, const std::vector<ZoneIndexSet>& windows = {});
 
         // False when the side of the block lies on the work-area border (or a zone id is unknown).
         bool HasNeighbour(const ZoneIndexSet& zones, Side side) const;

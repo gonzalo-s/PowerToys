@@ -133,6 +133,16 @@ namespace FancyZonesZoneRects
         return moved;
     }
 
+    MovedEdges RefusedSides(const RECT& requested, const RECT& actual, long tolerance) noexcept
+    {
+        MovedEdges refused;
+        refused.left = actual.left < requested.left - tolerance;
+        refused.top = actual.top < requested.top - tolerance;
+        refused.right = actual.right > requested.right + tolerance;
+        refused.bottom = actual.bottom > requested.bottom + tolerance;
+        return refused;
+    }
+
     UnitRects RectsFromGrid(const GridLayoutInfo& grid)
     {
         struct Cells
@@ -281,7 +291,7 @@ namespace FancyZonesZoneRects
         return bounds.has_value() && !OnBorder(SideOf(*bounds, side), side);
     }
 
-    MoveOutcome ZoneRectModel::MoveEdge(const ZoneIndexSet& zones, Side side, int position, int minSize, int snapRadius, const OccupiedFn& occupied)
+    MoveOutcome ZoneRectModel::MoveEdge(const ZoneIndexSet& zones, Side side, int position, int minSize, int snapRadius, const OccupiedFn& occupied, const std::vector<ZoneIndexSet>& windows)
     {
         const auto bounds = BoundsOf(zones);
         const auto baseBounds = BaseBoundsOf(zones);
@@ -310,6 +320,43 @@ namespace FancyZonesZoneRects
         const auto isOccupied = [&](ZoneIndex id) { return isDragged(id) || !occupied || occupied(id); };
         const auto touches = [&](const std::set<ZoneIndex>& group, const UnitRect& rect) {
             return std::any_of(group.begin(), group.end(), [&](ZoneIndex id) { return OverlapsAlongWall(m_current.at(id), rect, vertical); });
+        };
+
+        // Units squeezed as a whole: the dragged block and every known window (a zone may belong to several).
+        std::map<ZoneIndex, std::vector<size_t>> unitsOf;
+        {
+            size_t unit = 0;
+            const auto addUnit = [&](const ZoneIndexSet& ids) {
+                for (ZoneIndex id : ids)
+                {
+                    if (m_current.contains(id))
+                    {
+                        unitsOf[id].push_back(unit);
+                    }
+                }
+
+                ++unit;
+            };
+
+            addUnit(zones);
+            for (const auto& window : windows)
+            {
+                addUnit(window);
+            }
+        }
+
+        const auto sharesUnit = [&unitsOf](ZoneIndex x, ZoneIndex y) {
+            const auto ux = unitsOf.find(x);
+            const auto uy = unitsOf.find(y);
+            if (ux == unitsOf.end() || uy == unitsOf.end())
+            {
+                return false;
+            }
+
+            return std::any_of(ux->second.begin(), ux->second.end(), [&uy](size_t u) { return std::find(uy->second.begin(), uy->second.end(), u) != uy->second.end(); });
+        };
+        const auto sharesUnitWithAny = [&](const std::set<ZoneIndex>& group, ZoneIndex id) {
+            return std::any_of(group.begin(), group.end(), [&](ZoneIndex other) { return other != id && sharesUnit(other, id); });
         };
 
         // The dragged block's zones whose side lies on the wall.
@@ -346,11 +393,15 @@ namespace FancyZonesZoneRects
                     {
                         // Expand (push): an occupied zone lying beyond the old near edge of a moving zone, overlapping it
                         // along the wall and starting before t, is pushed (its far edge moves to t).
-                        const bool pushed = !isDragged(id) && beyond(t, farEdge(rect)) &&
-                                            std::any_of(groups.a.begin(), groups.a.end(), [&](ZoneIndex m) {
-                                                const UnitRect& moving = m_current.at(m);
-                                                return !beyond(nearEdge(moving), farEdge(rect)) && OverlapsAlongWall(moving, rect, vertical);
-                                            });
+                        const bool pushedDirectly = !isDragged(id) && beyond(t, farEdge(rect)) &&
+                                                    std::any_of(groups.a.begin(), groups.a.end(), [&](ZoneIndex m) {
+                                                        const UnitRect& moving = m_current.at(m);
+                                                        return !beyond(nearEdge(moving), farEdge(rect)) && OverlapsAlongWall(moving, rect, vertical);
+                                                    });
+                        // A zone of a pushed zone's window (unit) that extends past t, on the far side of the wall, is
+                        // pushed too: the window's bounding rect never overlaps the dragged block.
+                        const bool pushed = pushedDirectly ||
+                                            (!isDragged(id) && beyond(t, farEdge(rect)) && !beyond(wall, farEdge(rect)) && sharesUnitWithAny(groups.b, id));
                         // A zone whose near edge is the old far edge of a pushed zone (and overlaps it) follows the wall.
                         const bool follows = !pushed && std::any_of(groups.b.begin(), groups.b.end(), [&](ZoneIndex p) {
                                                  const UnitRect& pushedRect = m_current.at(p);
@@ -371,7 +422,7 @@ namespace FancyZonesZoneRects
                             groups.b.insert(id);
                             grew = true;
                         }
-                        else if (nearEdge(rect) == wall && touches(groups.b, rect))
+                        else if (nearEdge(rect) == wall && (touches(groups.b, rect) || sharesUnitWithAny(groups.a, id)))
                         {
                             groups.a.insert(id);
                             grew = true;
@@ -417,6 +468,77 @@ namespace FancyZonesZoneRects
             return (std::min)({ effectiveMin, current, base });
         };
 
+        // Squeezed zones: expanding squeezes the pushed zones (b), contracting the dragged and pulled zones (a). s is the
+        // direction the wall moves in; front = a squeezed zone's side moving with the wall, back = its opposite side.
+        const bool expanding = beyond(requested, wall);
+        const int s = expanding ? outward : -outward;
+        const auto ahead = [s](int a, int b) { return s * (a - b) > 0; };
+        const auto front = [&](const UnitRect& rect) { return expanding ? farEdge(rect) : nearEdge(rect); };
+        const auto back = [&](const UnitRect& rect) { return expanding ? nearEdge(rect) : farEdge(rect); };
+        const auto frontRef = [&](UnitRect& rect) -> int& {
+            return (expanding != high) ? High(rect, vertical) : Low(rect, vertical);
+        };
+        const auto backRef = [&](UnitRect& rect) -> int& {
+            return (expanding != high) ? Low(rect, vertical) : High(rect, vertical);
+        };
+
+        // The occupied zones right behind a squeezed zone: their front lies on its back, overlapping it along the wall.
+        const auto behind = [&](ZoneIndex id) {
+            const UnitRect& rect = m_current.at(id);
+            std::vector<ZoneIndex> result;
+            for (const auto& [other, otherRect] : m_current)
+            {
+                if (other != id && isOccupied(other) && !(expanding && isDragged(other)) && front(otherRect) == back(rect) &&
+                    OverlapsAlongWall(otherRect, rect, vertical))
+                {
+                    result.push_back(other);
+                }
+            }
+
+            return result;
+        };
+
+        // A squeezed zone at its minimum can push the zones behind it only when they all belong to its own unit.
+        const auto compressible = [&](ZoneIndex id, const std::vector<ZoneIndex>& behindZones) {
+            return !behindZones.empty() &&
+                   std::all_of(behindZones.begin(), behindZones.end(), [&](ZoneIndex other) { return sharesUnit(id, other); });
+        };
+
+        // Farthest position the front of a squeezed zone can reach: its back minus its minimum, or, when it can push
+        // the zones of its unit behind it, the most restrictive of their reach minus its minimum.
+        std::map<ZoneIndex, int> reachMemo;
+        std::function<int(ZoneIndex)> reach = [&](ZoneIndex id) -> int {
+            if (const auto it = reachMemo.find(id); it != reachMemo.end())
+            {
+                return it->second;
+            }
+
+            const int minimum = minFor(id);
+            int result = back(m_current.at(id)) - s * minimum;
+            reachMemo[id] = result; // provisional: guards against cycles of zero-size zones
+            const auto behindZones = behind(id);
+            if (compressible(id, behindZones))
+            {
+                std::optional<int> limit;
+                for (ZoneIndex other : behindZones)
+                {
+                    const int candidate = reach(other) - s * minimum;
+                    if (!limit || ahead(*limit, candidate))
+                    {
+                        limit = candidate;
+                    }
+                }
+
+                if (limit && ahead(*limit, result))
+                {
+                    result = *limit;
+                }
+            }
+
+            reachMemo[id] = result;
+            return result;
+        };
+
         Groups groups;
         if (beyond(target, wall))
         {
@@ -428,15 +550,16 @@ namespace FancyZonesZoneRects
                 target = borderLimit;
             }
 
-            // Every pushed zone keeps its minimum: t may not pass its near edge minus that minimum. The pushed set only
-            // shrinks when t moves back toward the wall, so iterating to the fixpoint gives the farthest feasible t.
+            // Every pushed zone keeps its minimum: t may not pass its reach (its near edge minus that minimum, farther
+            // when it pushes the zones of its own window behind it). The pushed set only shrinks when t moves back
+            // toward the wall, so iterating to the fixpoint gives the farthest feasible t.
             while (true)
             {
                 groups = groupsFor(target);
                 int limit = target;
                 for (ZoneIndex id : groups.b)
                 {
-                    const int bound = nearEdge(m_current.at(id)) - outward * minFor(id);
+                    const int bound = reach(id);
                     if (beyond(limit, bound))
                     {
                         limit = bound;
@@ -453,11 +576,12 @@ namespace FancyZonesZoneRects
         }
         else if (beyond(wall, target))
         {
-            // Contract: every zone whose near edge moves (the dragged zones and the zones pulled in) keeps its minimum.
+            // Contract: every zone whose near edge moves (the dragged zones and the zones pulled in) keeps its minimum
+            // (its reach: farther when it pushes the zones of its own window behind it).
             groups = groupsFor(target);
             for (ZoneIndex id : groups.a)
             {
-                const int bound = farEdge(m_current.at(id)) + outward * minFor(id);
+                const int bound = reach(id);
                 if (beyond(bound, target))
                 {
                     target = bound;
@@ -492,17 +616,80 @@ namespace FancyZonesZoneRects
 
         // the groups of the final target (contract groups do not depend on t)
         groups = groupsFor(target);
-        for (ZoneIndex id : groups.a)
+        UnitRects next = m_current;
+
+        // Growing zones: their side on the wall moves to the target.
+        for (ZoneIndex id : expanding ? groups.a : groups.b)
         {
-            UnitRect& rect = m_current.at(id);
-            (high ? High(rect, vertical) : Low(rect, vertical)) = target;
-        }
-        for (ZoneIndex id : groups.b)
-        {
-            UnitRect& rect = m_current.at(id);
-            (high ? Low(rect, vertical) : High(rect, vertical)) = target;
+            UnitRect& rect = next.at(id);
+            (expanding == high ? High(rect, vertical) : Low(rect, vertical)) = target;
         }
 
+        // Squeezed zones: the front moves to the target; a zone that would become smaller than its minimum keeps the
+        // minimum and pushes the zones of its unit right behind it (their front moves to its new back), and so on.
+        // Behind zones have their front farther in the direction s, so they are visited after the zones pushing them;
+        // the passes repeat until nothing changes (only matters for zero-size zones).
+        std::map<ZoneIndex, int> frontAt;
+        for (ZoneIndex id : expanding ? groups.b : groups.a)
+        {
+            frontAt[id] = target;
+        }
+
+        std::vector<ZoneIndex> order;
+        for (const auto& entry : m_current)
+        {
+            order.push_back(entry.first);
+        }
+
+        std::stable_sort(order.begin(), order.end(), [&](ZoneIndex x, ZoneIndex y) { return ahead(front(m_current.at(y)), front(m_current.at(x))); });
+
+        bool pushedFurther = true;
+        while (pushedFurther)
+        {
+            pushedFurther = false;
+            for (ZoneIndex id : order)
+            {
+                const auto it = frontAt.find(id);
+                if (it == frontAt.end())
+                {
+                    continue;
+                }
+
+                const int newFront = it->second;
+                const UnitRect& rect = m_current.at(id);
+                UnitRect& out = next.at(id);
+                frontRef(out) = newFront;
+                const int minimum = minFor(id);
+                if (s * (back(rect) - newFront) >= minimum)
+                {
+                    continue;
+                }
+
+                const auto behindZones = behind(id);
+                if (!compressible(id, behindZones))
+                {
+                    continue; // not reached: the target respects this zone's reach
+                }
+
+                const int newBack = newFront + s * minimum;
+                backRef(out) = newBack;
+                for (ZoneIndex other : behindZones)
+                {
+                    const auto [pos, inserted] = frontAt.emplace(other, newBack);
+                    if (!inserted && ahead(newBack, pos->second))
+                    {
+                        pos->second = newBack;
+                        pushedFurther = true;
+                    }
+                    else if (inserted)
+                    {
+                        pushedFurther = true;
+                    }
+                }
+            }
+        }
+
+        m_current = std::move(next);
         outcome.result = MoveResult::Moved;
         return outcome;
     }

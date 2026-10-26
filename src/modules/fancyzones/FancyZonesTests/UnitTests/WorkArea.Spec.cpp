@@ -1723,5 +1723,208 @@ namespace FancyZonesUnitTests
             Assert::AreEqual(2000L, ActiveRect(3).right);
             Assert::AreEqual(2016L, ActiveRect(1).left);
         }
+
+        // Wave 10: the user's real custom layout {A80253FF-...} (6 x 9 grid, 54 single-cell zones, no spacing) with the
+        // two windows of the FancyZones log: L = columns 1..3 x rows 2..4, R = columns 4..8 x rows 2..3, every other
+        // zone empty. Saved to the unit-test custom-layouts file and applied to a work area of width x height.
+        const ZoneIndexSet m_userLeft{ 12, 13, 14, 15, 16, 17, 18, 19, 22 };
+        const ZoneIndexSet m_userRight{ 32, 33, 34, 35, 36, 37, 38, 39, 50, 51 };
+
+        void UseUserLayout(long width, long height)
+        {
+            const auto uuid = FancyZonesUtils::GuidFromString(L"{A80253FF-C8ED-41BF-8CEA-E4608D31E6DA}").value();
+            const std::vector<int> rows{ 1222, 1221, 2557, 2556, 1222, 1222 };
+            const std::vector<int> columns{ 312, 1172, 1173, 2343, 1099, 1244, 1173, 1172, 312 };
+            const std::vector<std::vector<int>> map{ { 0, 6, 7, 10, 24, 25, 28, 29, 48 },
+                                                     { 1, 8, 9, 11, 26, 27, 30, 31, 49 },
+                                                     { 2, 12, 13, 16, 32, 33, 36, 37, 50 },
+                                                     { 3, 14, 15, 17, 34, 35, 38, 39, 51 },
+                                                     { 4, 18, 19, 22, 40, 41, 44, 45, 52 },
+                                                     { 5, 20, 21, 23, 42, 43, 46, 47, 53 } };
+
+            json::JsonArray rowsPercentage{};
+            for (const int percent : rows)
+            {
+                rowsPercentage.Append(json::value(percent));
+            }
+
+            json::JsonArray columnsPercentage{};
+            for (const int percent : columns)
+            {
+                columnsPercentage.Append(json::value(percent));
+            }
+
+            json::JsonArray cells{};
+            for (const auto& mapRow : map)
+            {
+                json::JsonArray cellsRow{};
+                for (const int id : mapRow)
+                {
+                    cellsRow.Append(json::value(id));
+                }
+
+                cells.Append(cellsRow);
+            }
+
+            json::JsonObject info{};
+            info.SetNamedValue(NonLocalizable::CustomLayoutsIds::RowsID, json::value(static_cast<int>(rows.size())));
+            info.SetNamedValue(NonLocalizable::CustomLayoutsIds::ColumnsID, json::value(static_cast<int>(columns.size())));
+            info.SetNamedValue(NonLocalizable::CustomLayoutsIds::RowsPercentageID, rowsPercentage);
+            info.SetNamedValue(NonLocalizable::CustomLayoutsIds::ColumnsPercentageID, columnsPercentage);
+            info.SetNamedValue(NonLocalizable::CustomLayoutsIds::CellChildMapID, cells);
+            info.SetNamedValue(NonLocalizable::CustomLayoutsIds::ShowSpacingID, json::value(false));
+            info.SetNamedValue(NonLocalizable::CustomLayoutsIds::SpacingID, json::value(0));
+            info.SetNamedValue(NonLocalizable::CustomLayoutsIds::SensitivityRadiusID, json::value(20));
+
+            json::JsonObject layoutJson{};
+            layoutJson.SetNamedValue(NonLocalizable::CustomLayoutsIds::UuidID, json::value(FancyZonesUtils::GuidToString(uuid).value()));
+            layoutJson.SetNamedValue(NonLocalizable::CustomLayoutsIds::NameID, json::value(L"User layout"));
+            layoutJson.SetNamedValue(NonLocalizable::CustomLayoutsIds::TypeID, json::value(NonLocalizable::CustomLayoutsIds::GridID));
+            layoutJson.SetNamedValue(NonLocalizable::CustomLayoutsIds::InfoID, info);
+
+            json::JsonArray layoutsArray{};
+            layoutsArray.Append(layoutJson);
+            json::JsonObject root{};
+            root.SetNamedValue(NonLocalizable::CustomLayoutsIds::CustomLayoutsArrayID, layoutsArray);
+            json::to_file(CustomLayouts::CustomLayoutsFileName(), root);
+            CustomLayouts::instance().LoadData();
+
+            WorkingLayouts::instance().Clear();
+            LayoutData layout{
+                .uuid = uuid,
+                .type = FancyZonesDataTypes::ZoneSetLayoutType::Custom,
+                .showSpacing = false,
+                .spacing = 0,
+                .zoneCount = 54,
+                .sensitivityRadius = 20,
+            };
+            AppliedLayouts::instance().ApplyLayout(m_workAreaId, layout);
+            m_workArea.reset();
+            m_workArea = WorkArea::Create({}, m_workAreaId, {}, FancyZonesUtils::Rect(RECT(0, 0, width, height)));
+            Assert::IsTrue(m_workArea->SupportsEdgeResize());
+            Assert::AreEqual(static_cast<size_t>(54), m_workArea->GetActiveZones().size());
+            // (the fake windows cannot be stamped, so Snap reports false, but the zones are assigned, as in OccupyZones)
+            m_workArea->Snap(Mocks::Window(), m_userLeft, false);
+            m_workArea->Snap(Mocks::Window(), m_userRight, false);
+            Assert::IsFalse(m_workArea->GetLayoutWindows().IsZoneEmpty(12));
+            Assert::IsFalse(m_workArea->GetLayoutWindows().IsZoneEmpty(51));
+            Assert::IsTrue(m_workArea->GetLayoutWindows().IsZoneEmpty(40));
+        }
+
+        RECT UserRect(const ZoneIndexSet& zones) const
+        {
+            return Layout::CombinedRect(m_workArea->GetActiveZones(), zones);
+        }
+
+        TEST_METHOD (UserLayoutLeftWindowTakes75And90Percent)
+        {
+            // 4096 x 2112 (the log's work area). R = (2048,515,4096,1595): its left edge is dragged right. The log
+            // stopped it at 2448 (R's own inner line 2498 - 50); now it reaches 3072 (75 % for L) and 3686 (90 %).
+            UseUserLayout(4096, 2112);
+            const RECT start = UserRect(m_userRight);
+            Assert::AreEqual(2048L, start.left);
+            Assert::AreEqual(4096L, start.right);
+
+            RECT frame = start;
+            frame.left = 2600;
+            RECT live2 = start;
+            live2.left = 3072;
+            RECT release = start;
+            release.left = 3072;
+            SimulateDrag(m_userRight, start, { frame, live2 }, release);
+            Assert::AreEqual(3072L, UserRect(m_userRight).left);
+            Assert::AreEqual(3072L, UserRect(m_userLeft).right);
+            Assert::AreEqual(127L, UserRect(m_userLeft).left);
+
+            RECT start2 = UserRect(m_userRight);
+            RECT live3 = start2;
+            live3.left = 3400;
+            RECT release2 = start2;
+            release2.left = 3686;
+            SimulateDrag(m_userRight, start2, { live3 }, release2);
+            Assert::AreEqual(3686L, UserRect(m_userRight).left);
+            Assert::AreEqual(3686L, UserRect(m_userLeft).right);
+            Assert::AreEqual(4096L, UserRect(m_userRight).right);
+        }
+
+        TEST_METHOD (UserLayoutRightWindowTakes75And90Percent)
+        {
+            // R's left edge dragged left: the log stopped it at 1138 (L's inner line 1088 + 50); now 1024 and 410.
+            UseUserLayout(4096, 2112);
+            const RECT start = UserRect(m_userRight);
+            RECT live = start;
+            live.left = 1500;
+            RECT release = start;
+            release.left = 1024;
+            SimulateDrag(m_userRight, start, { live }, release);
+            Assert::AreEqual(1024L, UserRect(m_userRight).left);
+            Assert::AreEqual(1024L, UserRect(m_userLeft).right);
+            Assert::AreEqual(1024L, ActiveRect(22).right); // L's row-4 zone follows: L never overlaps R
+
+            const RECT start2 = UserRect(m_userRight);
+            RECT release2 = start2;
+            release2.left = 410;
+            const auto result = m_workArea->ApplyEdgeResize(m_userRight, release2, Left(), nullptr);
+            Assert::IsFalse(result.clamped);
+            m_workArea->FinishEdgeResize(m_userRight, release2, Left(), nullptr);
+            Assert::AreEqual(410L, UserRect(m_userRight).left);
+            Assert::AreEqual(410L, UserRect(m_userLeft).right);
+
+            // past L's minimum (three columns x 50 px after the empty 127 px column): 127 + 150 = 277
+            RECT beyond = UserRect(m_userRight);
+            beyond.left = 150;
+            const auto clamped = m_workArea->ApplyEdgeResize(m_userRight, beyond, Left(), nullptr);
+            Assert::IsTrue(clamped.clamped);
+            Assert::AreEqual(277L, clamped.clampedFrame.left);
+        }
+
+        TEST_METHOD (UserLayoutLeftWindowEdgeBothWays)
+        {
+            // The same wall dragged from L's side: L grows to 75 % / shrinks to 25 %.
+            UseUserLayout(4096, 2112);
+            RECT start = UserRect(m_userLeft);
+            Assert::AreEqual(2048L, start.right);
+            RECT release = start;
+            release.right = 3072;
+            SimulateDrag(m_userLeft, start, { release }, release);
+            Assert::AreEqual(3072L, UserRect(m_userLeft).right);
+            Assert::AreEqual(3072L, UserRect(m_userRight).left);
+
+            start = UserRect(m_userLeft);
+            release = start;
+            release.right = 1024;
+            SimulateDrag(m_userLeft, start, { release }, release);
+            Assert::AreEqual(1024L, UserRect(m_userLeft).right);
+            Assert::AreEqual(1024L, UserRect(m_userRight).left);
+        }
+
+        TEST_METHOD (UserLayoutAt1920x1080)
+        {
+            // 75 % both ways works; 90 % for L stops where R's five columns are 50 px each (1920 - 250 = 1670).
+            UseUserLayout(1920, 1080);
+            RECT start = UserRect(m_userRight);
+            Assert::AreEqual(960L, start.left);
+            RECT release = start;
+            release.left = 1440;
+            SimulateDrag(m_userRight, start, { release }, release);
+            Assert::AreEqual(1440L, UserRect(m_userRight).left);
+            Assert::AreEqual(1440L, UserRect(m_userLeft).right);
+
+            start = UserRect(m_userRight);
+            RECT tooFar = start;
+            tooFar.left = 1728;
+            const auto result = m_workArea->ApplyEdgeResize(m_userRight, tooFar, Left(), nullptr);
+            Assert::IsTrue(result.clamped);
+            Assert::AreEqual(1670L, result.clampedFrame.left);
+            Assert::AreEqual(1670L, UserRect(m_userLeft).right);
+
+            // R grows to 75 % (480): fine
+            start = UserRect(m_userRight);
+            release = start;
+            release.left = 480;
+            SimulateDrag(m_userRight, start, { release }, release);
+            Assert::AreEqual(480L, UserRect(m_userRight).left);
+            Assert::AreEqual(480L, UserRect(m_userLeft).right);
+        }
     };
 }

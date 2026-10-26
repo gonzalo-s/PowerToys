@@ -1,6 +1,8 @@
 #pragma once
 
+#include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -137,7 +139,8 @@ public:
     // Moves snapped windows (except skipWindow) into their zones with a single async SetWindowPos each.
     // With previousZones, only windows whose combined zone rect differs from previousZones are moved.
     // Skips hidden, minimized, maximized and cloaked windows. Safe for the live resize path.
-    void RepositionSnappedWindows(HWND skipWindow = nullptr, const ZonesMap* previousZones = nullptr);
+    // requestedRects (optional): receives the window rect asked of every window actually moved (SetWindowPos called).
+    void RepositionSnappedWindows(HWND skipWindow = nullptr, const ZonesMap* previousZones = nullptr, std::map<HWND, RECT>* requestedRects = nullptr);
 
     // True when the combined rect of zones differs between the two zone maps (or a zone is missing from either).
     static bool ZonesRectChanged(const ZonesMap& before, const ZonesMap& after, const ZoneIndexSet& zones);
@@ -158,7 +161,11 @@ protected:
 
 private:
     bool InitWindow(HINSTANCE hinstance);
-    void RepositionWindow(HWND window, const ZoneIndexSet& zones);
+    void RepositionWindow(HWND window, const ZoneIndexSet& zones, std::map<HWND, RECT>* requestedRects = nullptr);
+    // Live drag: logs (once per window and drag) a neighbour moved on the previous update whose actual rect is larger
+    // than the rect it was asked to take (it refused to shrink, e.g. an app minimum size), then forgets the targets.
+    void CheckRefusedNeighbours();
+    void ClearNeighbourTargets() noexcept;
     const ZonesMap& ActiveZones() const noexcept;
     void RemoveWorkingLayout();
     EdgeResizeResult ApplyEdgeResizeInternal(const ZoneIndexSet& zones, const RECT& currentFrame, const FancyZonesZoneRects::MovedEdges& moved, HWND skipWindow, bool reposition);
@@ -178,4 +185,6 @@ private:
     ZonesMap m_workingZones; // zones of the working (resized) layout that position the windows; empty = none
     LayoutAssignedWindows m_layoutWindows{};
     std::unique_ptr<ZonesOverlay> m_zonesOverlay;
+    std::map<HWND, RECT> m_neighbourTargets; // live drag: rects asked of the neighbours moved by the last update (async)
+    std::set<HWND> m_refusedNeighbours; // live drag: neighbours already logged as refusing their target
 };

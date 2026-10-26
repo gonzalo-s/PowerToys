@@ -1009,5 +1009,273 @@ namespace FancyZonesUnitTests
             Assert::IsTrue(fresh.ResolveSnap({ 1 }, Only({ 0, 2, 3 })).empty());
             Assert::IsFalse(fresh.IsModified());
         }
+
+        // Wave 10: the user's real custom layout (6 rows x 9 columns, 54 single-cell zones, ids as numbered by the
+        // editor). Columns 0..9 boundaries: 0 312 1484 2657 5000 6099 7343 8516 9688 10000; rows: 0 1222 2443 5000
+        // 7556 8778 10000. Left window L = columns 1..3 x rows 2..4, right window R = columns 4..8 x rows 2..3 (the
+        // zone sets of the FancyZones log); every other zone is empty. 4096 px wide: min 50 px = 122 units, snap
+        // radius 20 px = 48 units; 1920 px wide: 260 / 104 units.
+        static UnitRects UserLayout()
+        {
+            return RectsFromGrid(MakeGrid({ 1222, 1221, 2557, 2556, 1222, 1222 },
+                                          { 312, 1172, 1173, 2343, 1099, 1244, 1173, 1172, 312 },
+                                          { { 0, 6, 7, 10, 24, 25, 28, 29, 48 },
+                                            { 1, 8, 9, 11, 26, 27, 30, 31, 49 },
+                                            { 2, 12, 13, 16, 32, 33, 36, 37, 50 },
+                                            { 3, 14, 15, 17, 34, 35, 38, 39, 51 },
+                                            { 4, 18, 19, 22, 40, 41, 44, 45, 52 },
+                                            { 5, 20, 21, 23, 42, 43, 46, 47, 53 } }));
+        }
+
+        static ZoneIndexSet UserLeft() { return { 12, 13, 14, 15, 16, 17, 18, 19, 22 }; }
+        static ZoneIndexSet UserRight() { return { 32, 33, 34, 35, 36, 37, 38, 39, 50, 51 }; }
+        static std::vector<ZoneIndexSet> UserWindows() { return { UserLeft(), UserRight() }; }
+        static OccupiedFn UserOccupied() { return Only({ 12, 13, 14, 15, 16, 17, 18, 19, 22, 32, 33, 34, 35, 36, 37, 38, 39, 50, 51 }); }
+
+        static void AssertSpan(const ZoneRectModel& model, ZoneIndex id, int left, int right)
+        {
+            Assert::AreEqual(left, model.Current().at(id).left);
+            Assert::AreEqual(right, model.Current().at(id).right);
+        }
+
+        TEST_METHOD (UserLayoutBaseRects)
+        {
+            const auto rects = UserLayout();
+            Assert::AreEqual(static_cast<size_t>(54), rects.size());
+            AssertRect({ 312, 2443, 1484, 5000 }, rects.at(12));
+            AssertRect({ 2657, 7556, 5000, 8778 }, rects.at(22));
+            AssertRect({ 5000, 2443, 6099, 5000 }, rects.at(32));
+            AssertRect({ 9688, 5000, 10000, 7556 }, rects.at(51));
+            ZoneRectModel model(rects);
+            AssertRect({ 312, 2443, 5000, 8778 }, *model.BoundsOf(UserLeft()));
+            AssertRect({ 5000, 2443, 10000, 7556 }, *model.BoundsOf(UserRight()));
+        }
+
+        TEST_METHOD (UserLayoutRightWindowShrinksPastItsOwnInnerLines)
+        {
+            // The log: R's left edge dragged right stopped at 2448 px = 5977 units = 6099 (R's own inner line) - 122.
+            // Intended: R's zones are squeezed one after the other; only R's far side limits it.
+            ZoneRectModel model(UserLayout());
+
+            // 75 % for L: 3072 px = 7500 units (no gridline within 48)
+            auto outcome = model.MoveEdge(UserRight(), Side::Left, 7500, 122, 48, UserOccupied(), UserWindows());
+            AssertMoved(outcome);
+            Assert::IsFalse(outcome.clamped);
+            Assert::AreEqual(7500, outcome.position);
+            AssertRect({ 7500, 2443, 10000, 7556 }, *model.BoundsOf(UserRight()));
+            AssertRect({ 312, 2443, 7500, 8778 }, *model.BoundsOf(UserLeft()));
+            for (const ZoneIndex top : { 32, 34 })
+            {
+                AssertSpan(model, top, 7500, 7622);
+            }
+            AssertSpan(model, 33, 7622, 7744);
+            AssertSpan(model, 35, 7622, 7744);
+            AssertSpan(model, 36, 7744, 8516);
+            AssertSpan(model, 38, 7744, 8516);
+            AssertAtBase(model, 37);
+            AssertAtBase(model, 50);
+            AssertSpan(model, 16, 2657, 7500);
+            AssertSpan(model, 17, 2657, 7500);
+            AssertAtBase(model, 22); // L's row 4 is not on the wall; L's bounding rect already reaches 7500
+            AssertAtBase(model, 40); // empty
+
+            // 90 % for L: 3686 px = 9000 units (same drag, continued)
+            outcome = model.MoveEdge(UserRight(), Side::Left, 9000, 122, 48, UserOccupied(), UserWindows());
+            AssertMoved(outcome);
+            Assert::IsFalse(outcome.clamped);
+            AssertSpan(model, 32, 9000, 9122);
+            AssertSpan(model, 33, 9122, 9244);
+            AssertSpan(model, 36, 9244, 9366);
+            AssertSpan(model, 37, 9366, 9688);
+            AssertSpan(model, 39, 9366, 9688);
+            AssertAtBase(model, 50);
+            AssertSpan(model, 17, 2657, 9000);
+
+            // further: R keeps 5 x 122 (its five columns at their minimum): 10000 - 610 = 9390
+            outcome = model.MoveEdge(UserRight(), Side::Left, 9990, 122, 48, UserOccupied(), UserWindows());
+            Assert::IsTrue(outcome.clamped);
+            Assert::AreEqual(9390, outcome.position);
+            AssertSpan(model, 32, 9390, 9512);
+            AssertSpan(model, 33, 9512, 9634);
+            AssertSpan(model, 36, 9634, 9756);
+            AssertSpan(model, 37, 9756, 9878);
+            AssertSpan(model, 50, 9878, 10000);
+            AssertSpan(model, 51, 9878, 10000);
+        }
+
+        TEST_METHOD (UserLayoutLeftWindowGrowsPushingTheWholeRightWindow)
+        {
+            // L's right edge dragged right: R (pushed) is squeezed as a whole, not stopped at its inner line 6099.
+            ZoneRectModel model(UserLayout());
+            auto outcome = model.MoveEdge(UserLeft(), Side::Right, 7500, 122, 48, UserOccupied(), UserWindows());
+            AssertMoved(outcome);
+            Assert::IsFalse(outcome.clamped);
+            AssertRect({ 312, 2443, 7500, 8778 }, *model.BoundsOf(UserLeft()));
+            AssertRect({ 7500, 2443, 10000, 7556 }, *model.BoundsOf(UserRight()));
+            AssertSpan(model, 22, 2657, 7500); // dragged (on the wall), grows over the empty zones of row 4
+            AssertSpan(model, 32, 7500, 7622);
+            AssertSpan(model, 35, 7622, 7744);
+            AssertSpan(model, 36, 7744, 8516);
+            AssertAtBase(model, 37);
+
+            outcome = model.MoveEdge(UserLeft(), Side::Right, 9000, 122, 48, UserOccupied(), UserWindows());
+            AssertMoved(outcome);
+            Assert::IsFalse(outcome.clamped);
+            AssertRect({ 9000, 2443, 10000, 7556 }, *model.BoundsOf(UserRight()));
+            AssertSpan(model, 34, 9000, 9122);
+            AssertSpan(model, 35, 9122, 9244);
+            AssertSpan(model, 38, 9244, 9366);
+            AssertSpan(model, 39, 9366, 9688);
+            AssertAtBase(model, 51);
+
+            outcome = model.MoveEdge(UserLeft(), Side::Right, 10000, 122, 48, UserOccupied(), UserWindows());
+            Assert::IsTrue(outcome.clamped);
+            Assert::AreEqual(9390, outcome.position);
+        }
+
+        TEST_METHOD (UserLayoutRightWindowGrowsPushingTheWholeLeftWindow)
+        {
+            // The log: R's left edge dragged left stopped at 1138 px = 2779 units = 2657 (L's inner line) + 122.
+            ZoneRectModel model(UserLayout());
+
+            // 75 % for R: 1024 px = 2500 units
+            auto outcome = model.MoveEdge(UserRight(), Side::Left, 2500, 122, 48, UserOccupied(), UserWindows());
+            AssertMoved(outcome);
+            Assert::IsFalse(outcome.clamped);
+            AssertRect({ 2500, 2443, 10000, 7556 }, *model.BoundsOf(UserRight()));
+            AssertRect({ 312, 2443, 2500, 8778 }, *model.BoundsOf(UserLeft()));
+            for (const ZoneIndex id : { 16, 17, 22 }) // 22: L's row-4 zone follows (L's bounding rect never overlaps R)
+            {
+                AssertSpan(model, id, 2378, 2500);
+            }
+            for (const ZoneIndex id : { 13, 15, 19 })
+            {
+                AssertSpan(model, id, 1484, 2378);
+            }
+            for (const ZoneIndex id : { 12, 14, 18 })
+            {
+                AssertAtBase(model, id);
+            }
+
+            // 90 % for R: 410 px = ceil(1000.98) = 1001 units
+            outcome = model.MoveEdge(UserRight(), Side::Left, 1001, 122, 48, UserOccupied(), UserWindows());
+            AssertMoved(outcome);
+            Assert::IsFalse(outcome.clamped);
+            AssertRect({ 312, 2443, 1001, 8778 }, *model.BoundsOf(UserLeft()));
+            AssertSpan(model, 16, 879, 1001);
+            AssertSpan(model, 22, 879, 1001);
+            AssertSpan(model, 13, 757, 879);
+            AssertSpan(model, 19, 757, 879);
+            AssertSpan(model, 12, 312, 757);
+            AssertSpan(model, 18, 312, 757);
+            AssertAtBase(model, 2); // empty column 0 is no part of L
+
+            // further: L keeps its three columns at 122 each: 312 + 366 = 678
+            outcome = model.MoveEdge(UserRight(), Side::Left, 100, 122, 48, UserOccupied(), UserWindows());
+            Assert::IsTrue(outcome.clamped);
+            Assert::AreEqual(678, outcome.position);
+            AssertSpan(model, 17, 556, 678);
+            AssertSpan(model, 15, 434, 556);
+            AssertSpan(model, 14, 312, 434);
+        }
+
+        TEST_METHOD (UserLayoutLeftWindowShrinksPastItsOwnInnerLines)
+        {
+            ZoneRectModel model(UserLayout());
+            auto outcome = model.MoveEdge(UserLeft(), Side::Right, 2500, 122, 48, UserOccupied(), UserWindows());
+            AssertMoved(outcome);
+            Assert::IsFalse(outcome.clamped);
+            AssertRect({ 312, 2443, 2500, 8778 }, *model.BoundsOf(UserLeft()));
+            AssertRect({ 2500, 2443, 10000, 7556 }, *model.BoundsOf(UserRight()));
+            AssertSpan(model, 22, 2378, 2500);
+            AssertSpan(model, 19, 1484, 2378);
+            AssertAtBase(model, 40); // empty: not pulled
+
+            outcome = model.MoveEdge(UserLeft(), Side::Right, 1001, 122, 48, UserOccupied(), UserWindows());
+            AssertMoved(outcome);
+            Assert::IsFalse(outcome.clamped);
+            AssertSpan(model, 17, 879, 1001);
+            AssertSpan(model, 15, 757, 879);
+            AssertSpan(model, 14, 312, 757);
+            AssertSpan(model, 34, 1001, 6099); // R's zones on the wall follow the wall; R's inner lines stay
+            AssertSpan(model, 35, 6099, 7343);
+        }
+
+        TEST_METHOD (UserLayoutAt1920StopsAtTheWindowsMinimum)
+        {
+            // 1920 px: min 260 units. 75 % works; 90 % (1728 px = 9000 units) for L would leave R 192 px, less than
+            // its five columns x 50 px: R stops at 10000 - 5 x 260 = 8700 (1670 px).
+            ZoneRectModel model(UserLayout());
+            auto outcome = model.MoveEdge(UserRight(), Side::Left, 7500, 260, 104, UserOccupied(), UserWindows());
+            AssertMoved(outcome);
+            Assert::IsFalse(outcome.clamped);
+            AssertSpan(model, 32, 7500, 7760);
+            AssertSpan(model, 33, 7760, 8020);
+            AssertSpan(model, 36, 8020, 8516);
+
+            outcome = model.MoveEdge(UserRight(), Side::Left, 9000, 260, 104, UserOccupied(), UserWindows());
+            Assert::IsTrue(outcome.clamped);
+            Assert::AreEqual(8700, outcome.position);
+            AssertSpan(model, 50, 9740, 10000);
+            AssertRect({ 312, 2443, 8700, 8778 }, *model.BoundsOf(UserLeft()));
+
+            // the other direction: R grows; L keeps 3 x 260 after the empty column 0: 312 + 780 = 1092
+            ZoneRectModel other(UserLayout());
+            outcome = other.MoveEdge(UserRight(), Side::Left, 3750, 260, 104, UserOccupied(), UserWindows());
+            AssertMoved(outcome);
+            Assert::IsFalse(outcome.clamped);
+            AssertRect({ 312, 2443, 3750, 8778 }, *other.BoundsOf(UserLeft()));
+            outcome = other.MoveEdge(UserRight(), Side::Left, 1000, 260, 104, UserOccupied(), UserWindows());
+            Assert::IsTrue(outcome.clamped);
+            Assert::AreEqual(1092, outcome.position);
+        }
+
+        TEST_METHOD (UserLayoutWithoutWindowListStopsAtTheNeighbourZone)
+        {
+            // Without the window list a pushed zone is its own unit: the old limit of the log (2657 + 122 = 2779,
+            // 1138 px) still applies. The dragged block itself is always one unit.
+            ZoneRectModel model(UserLayout());
+            auto outcome = model.MoveEdge(UserRight(), Side::Left, 2500, 122, 48, UserOccupied());
+            Assert::IsTrue(outcome.clamped);
+            Assert::AreEqual(2779, outcome.position);
+            AssertSpan(model, 16, 2657, 2779);
+            AssertAtBase(model, 13);
+
+            ZoneRectModel shrink(UserLayout());
+            outcome = shrink.MoveEdge(UserRight(), Side::Left, 7500, 122, 48, UserOccupied());
+            Assert::IsFalse(outcome.clamped);
+            Assert::AreEqual(7500, outcome.position);
+        }
+
+        TEST_METHOD (UserLayoutNeighbourStopsAtAnotherWindowBehindIt)
+        {
+            // L only holds column 3 (16, 17); another window W holds columns 1..2 of rows 2..3. Squeezing L to its
+            // minimum may not push W: the limit is 2657 + 122 = 2779.
+            const std::vector<ZoneIndexSet> windows{ { 16, 17 }, { 12, 13, 14, 15 }, UserRight() };
+            ZoneRectModel model(UserLayout());
+            const auto outcome = model.MoveEdge(UserRight(), Side::Left, 2500, 122, 48, Only({ 12, 13, 14, 15, 16, 17, 32, 33, 34, 35, 36, 37, 38, 39, 50, 51 }), windows);
+            Assert::IsTrue(outcome.clamped);
+            Assert::AreEqual(2779, outcome.position);
+            AssertSpan(model, 16, 2657, 2779);
+            AssertAtBase(model, 13);
+            AssertAtBase(model, 12);
+        }
+
+        TEST_METHOD (RefusedSidesReportsOnlyLargerSides)
+        {
+            const RECT requested{ 100, 0, 500, 1000 };
+            auto sides = RefusedSides(requested, RECT{ 100, 0, 620, 1000 }, 2);
+            Assert::IsTrue(sides.right && !sides.left && !sides.top && !sides.bottom);
+
+            sides = RefusedSides(requested, RECT{ 97, 0, 500, 1000 }, 2);
+            Assert::IsTrue(sides.left && !sides.right);
+
+            // within the tolerance, or smaller than requested: nothing
+            Assert::IsFalse(RefusedSides(requested, RECT{ 98, 0, 502, 1000 }, 2).any());
+            Assert::IsFalse(RefusedSides(requested, RECT{ 150, 10, 450, 990 }, 2).any());
+
+            sides = RefusedSides(requested, RECT{ 100, -5, 500, 1003 }, 2);
+            Assert::IsTrue(sides.top && sides.bottom && !sides.left && !sides.right);
+        }
     };
 }
