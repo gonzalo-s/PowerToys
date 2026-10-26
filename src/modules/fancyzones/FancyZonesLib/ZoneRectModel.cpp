@@ -53,6 +53,12 @@ namespace FancyZonesZoneRects
             return end > start;
         }
 
+        // Positive-area intersection: rectangles that only touch along a side or at a corner do not overlap.
+        constexpr bool Overlaps(const UnitRect& a, const UnitRect& b) noexcept
+        {
+            return (std::min)(a.right, b.right) > (std::max)(a.left, b.left) && (std::min)(a.bottom, b.bottom) > (std::max)(a.top, b.top);
+        }
+
         constexpr int SideOf(const UnitRect& rect, Side side) noexcept
         {
             switch (side)
@@ -499,5 +505,95 @@ namespace FancyZonesZoneRects
 
         outcome.result = MoveResult::Moved;
         return outcome;
+    }
+
+    std::vector<ZoneIndex> ZoneRectModel::ResolveSnap(const ZoneIndexSet& zones, const OccupiedFn& occupied, const std::vector<ZoneIndexSet>& windows)
+    {
+        if (!BoundsOf(zones))
+        {
+            return {};
+        }
+
+        // Units that move together: every window's (known) zones, then every other occupied zone on its own.
+        std::vector<ZoneIndexSet> units;
+        std::set<ZoneIndex> inWindows;
+        for (const auto& window : windows)
+        {
+            ZoneIndexSet known;
+            for (ZoneIndex id : window)
+            {
+                if (m_current.contains(id))
+                {
+                    known.push_back(id);
+                    inWindows.insert(id);
+                }
+            }
+
+            if (!known.empty())
+            {
+                units.push_back(std::move(known));
+            }
+        }
+
+        for (const auto& entry : m_current)
+        {
+            if (!inWindows.contains(entry.first) && (!occupied || occupied(entry.first)))
+            {
+                units.push_back(ZoneIndexSet{ entry.first });
+            }
+        }
+
+        // Fixpoint over the current rects (nothing is reset before every conflict is known).
+        std::set<ZoneIndex> reset(zones.begin(), zones.end());
+        std::vector<bool> resetUnits(units.size(), false);
+        const auto conflicts = [&](const ZoneIndexSet& unit) {
+            for (ZoneIndex id : unit)
+            {
+                if (reset.contains(id))
+                {
+                    return true;
+                }
+
+                const UnitRect& current = m_current.at(id);
+                for (ZoneIndex target : reset)
+                {
+                    if (Overlaps(current, m_base.at(target)))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        };
+
+        bool grew = true;
+        while (grew)
+        {
+            grew = false;
+            for (size_t i = 0; i < units.size(); ++i)
+            {
+                if (!resetUnits[i] && conflicts(units[i]))
+                {
+                    resetUnits[i] = true;
+                    reset.insert(units[i].begin(), units[i].end());
+                    grew = true;
+                }
+            }
+        }
+
+        std::vector<ZoneIndex> changed;
+        for (ZoneIndex id : reset)
+        {
+            UnitRect& current = m_current.at(id);
+            const UnitRect& base = m_base.at(id);
+            if (current != base)
+            {
+                current = base;
+                changed.push_back(id);
+            }
+        }
+
+        return changed;
     }
 }

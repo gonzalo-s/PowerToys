@@ -140,6 +140,15 @@ namespace FancyZonesZoneRects
         // False when the side of the block lies on the work-area border (or a zone id is unknown).
         bool HasNeighbour(const ZoneIndexSet& zones, Side side) const;
 
+        // User snap of a window into zones: those zones go back to their base rects, and so does every occupied zone
+        // that conflicts with them. A conflict is an occupied zone (not yet reset) whose current rect overlaps, with a
+        // positive area (touching sides do not count), the base rect of a reset zone; repeated until nothing more
+        // conflicts. A window spanning several zones (an entry of windows) is one unit: all of its zones conflict
+        // together when one of them does. Occupied = occupied(id) or listed in windows (empty occupied and no windows:
+        // every zone). Every other zone (empty, or occupied without a conflict) keeps its current rect. Returns the
+        // zones whose rect changed (ascending), empty when nothing changed or a zone id is unknown.
+        std::vector<ZoneIndex> ResolveSnap(const ZoneIndexSet& zones, const OccupiedFn& occupied, const std::vector<ZoneIndexSet>& windows = {});
+
     private:
         UnitRects m_base;
         UnitRects m_current;

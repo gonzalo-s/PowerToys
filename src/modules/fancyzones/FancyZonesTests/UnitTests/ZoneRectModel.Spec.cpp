@@ -839,5 +839,175 @@ namespace FancyZonesUnitTests
             Assert::IsTrue(outcome.clamped);
             Assert::AreEqual(9500, outcome.position);
         }
+
+        // ---- User snap (wave 9): only windows that conflict with the snapped zones go back to their base rects ----
+        // Four 2500 columns: zone 0 0..2500, zone 1 2500..5000, zone 2 5000..7500, zone 3 7500..10000.
+
+        static void AssertChanged(const std::vector<ZoneIndex>& expected, const std::vector<ZoneIndex>& actual)
+        {
+            Assert::AreEqual(expected.size(), actual.size());
+            for (size_t i = 0; i < expected.size(); ++i)
+            {
+                Assert::AreEqual(expected[i], actual[i]);
+            }
+        }
+
+        // Windows in zones 0 and 3 (the others empty): zone 0 expanded to 4000 (40 %), zone 3 to 6000..10000 (60 %).
+        static ZoneRectModel TwoExpandedWindows()
+        {
+            ZoneRectModel model(OneRow({ 2500, 2500, 2500, 2500 }));
+            AssertMoved(model.MoveEdge({ 0 }, Side::Right, 4000, 260, 0, Only({ 0, 3 })));
+            AssertMoved(model.MoveEdge({ 3 }, Side::Left, 6000, 260, 0, Only({ 0, 3 })));
+            AssertRect({ 0, 0, 4000, 10000 }, model.Current().at(0));
+            AssertRect({ 6000, 0, 10000, 10000 }, model.Current().at(3));
+            AssertAtBase(model, 1);
+            AssertAtBase(model, 2);
+            return model;
+        }
+
+        TEST_METHOD (SnapIntoZoneOneResetsOnlyTheWindowItOverlaps)
+        {
+            // zone 1's base 2500..5000 overlaps zone 0 (0..4000): zone 0 resets; zone 3 (6000..10000) does not overlap
+            auto model = TwoExpandedWindows();
+            AssertChanged({ 0 }, model.ResolveSnap({ 1 }, Only({ 0, 3 })));
+            AssertRect({ 0, 0, 2500, 10000 }, model.Current().at(0));
+            AssertAtBase(model, 1);
+            AssertAtBase(model, 2);
+            AssertRect({ 6000, 0, 10000, 10000 }, model.Current().at(3));
+            Assert::IsTrue(model.IsModified());
+        }
+
+        TEST_METHOD (SnapIntoZoneTwoResetsOnlyTheWindowItOverlaps)
+        {
+            // zone 2's base 5000..7500 overlaps zone 3 (6000..10000) but not zone 0 (0..4000)
+            auto model = TwoExpandedWindows();
+            AssertChanged({ 3 }, model.ResolveSnap({ 2 }, Only({ 0, 3 })));
+            AssertRect({ 0, 0, 4000, 10000 }, model.Current().at(0));
+            AssertAtBase(model, 3);
+            AssertAtBase(model, 1);
+            AssertAtBase(model, 2);
+            Assert::IsTrue(model.IsModified());
+        }
+
+        TEST_METHOD (SnapFarFromTheExpandedWindowsMovesNothing)
+        {
+            // five 2000 columns: zone 0 expanded to 3000, zone 4 to 7000..10000; zone 2 (4000..6000) overlaps neither
+            ZoneRectModel model(OneRow({ 2000, 2000, 2000, 2000, 2000 }));
+            AssertMoved(model.MoveEdge({ 0 }, Side::Right, 3000, 260, 0, Only({ 0, 4 })));
+            AssertMoved(model.MoveEdge({ 4 }, Side::Left, 7000, 260, 0, Only({ 0, 4 })));
+            const UnitRects before = model.Current();
+
+            Assert::IsTrue(model.ResolveSnap({ 2 }, Only({ 0, 4 })).empty());
+            Assert::IsTrue(before == model.Current());
+            AssertRect({ 0, 0, 3000, 10000 }, model.Current().at(0));
+            AssertRect({ 7000, 0, 10000, 10000 }, model.Current().at(4));
+        }
+
+        TEST_METHOD (SnapConflictsChainThroughResetZones)
+        {
+            // windows in zones 1, 2 and 3: zone 1's left to 1500 (over the empty zone 0), then zone 2's left to 4500
+            // (pushing zone 1's right): zone 1 = 1500..4500, zone 2 = 4500..7500.
+            ZoneRectModel model(OneRow({ 2500, 2500, 2500, 2500 }));
+            AssertMoved(model.MoveEdge({ 1 }, Side::Left, 1500, 260, 0, Only({ 1, 2, 3 })));
+            AssertMoved(model.MoveEdge({ 2 }, Side::Left, 4500, 260, 0, Only({ 1, 2, 3 })));
+            AssertRect({ 1500, 0, 4500, 10000 }, model.Current().at(1));
+            AssertRect({ 4500, 0, 7500, 10000 }, model.Current().at(2));
+
+            // snap into zone 0 (0..2500): zone 1 (1500..4500) overlaps it and resets to 2500..5000, whose base overlaps
+            // zone 2 (4500..7500): zone 2 resets too; zone 3 (7500..10000) only touches zone 2's base: kept
+            AssertChanged({ 1, 2 }, model.ResolveSnap({ 0 }, Only({ 1, 2, 3 })));
+            AssertAtBase(model, 0);
+            AssertAtBase(model, 1);
+            AssertAtBase(model, 2);
+            AssertAtBase(model, 3);
+            Assert::IsFalse(model.IsModified());
+        }
+
+        TEST_METHOD (SnapConflictWithAMultiZoneWindowResetsAllOfItsZones)
+        {
+            // 2 x 2: one window spans the right column (zones 1 and 3), its left side expanded to 4000
+            ZoneRectModel model(G22());
+            AssertMoved(model.MoveEdge({ 1, 3 }, Side::Left, 4000, 260, 0, Only({ 1, 3 })));
+            AssertRect({ 4000, 0, 10000, 5000 }, model.Current().at(1));
+            AssertRect({ 4000, 5000, 10000, 10000 }, model.Current().at(3));
+
+            // snap into zone 0: zone 1 overlaps it; zone 3 does not, but it belongs to the same window: both reset
+            const std::vector<ZoneIndexSet> windows{ { 1, 3 } };
+            AssertChanged({ 1, 3 }, model.ResolveSnap({ 0 }, Only({ 1, 3 }), windows));
+            AssertAtBase(model, 1);
+            AssertAtBase(model, 3);
+            AssertAtBase(model, 2);
+            Assert::IsFalse(model.IsModified());
+
+            // without the window list each zone is its own unit: only zone 1 overlaps
+            ZoneRectModel perZone(G22());
+            perZone.MoveEdge({ 1, 3 }, Side::Left, 4000, 260, 0, Only({ 1, 3 }));
+            AssertChanged({ 1 }, perZone.ResolveSnap({ 0 }, Only({ 1, 3 })));
+            AssertRect({ 4000, 5000, 10000, 10000 }, perZone.Current().at(3));
+
+            // the window list alone marks its zones as occupied
+            ZoneRectModel listed(G22());
+            listed.MoveEdge({ 1, 3 }, Side::Left, 4000, 260, 0, Only({ 1, 3 }));
+            AssertChanged({ 1, 3 }, listed.ResolveSnap({ 0 }, Only({}), windows));
+        }
+
+        TEST_METHOD (SnapTouchingAnExpandedWindowIsNoConflict)
+        {
+            // zone 0 expanded to 5000 (over the empty zone 1); zone 2 (5000..7500) only touches it
+            ZoneRectModel model(OneRow({ 2500, 2500, 2500, 2500 }));
+            AssertMoved(model.MoveEdge({ 0 }, Side::Right, 5000, 260, 0, Only({ 0 })));
+            Assert::IsTrue(model.ResolveSnap({ 2 }, Only({ 0 })).empty());
+            AssertRect({ 0, 0, 5000, 10000 }, model.Current().at(0));
+
+            // the same in the other direction (zone 3 expanded to 5000..10000, snap into zone 1)
+            ZoneRectModel other(OneRow({ 2500, 2500, 2500, 2500 }));
+            AssertMoved(other.MoveEdge({ 3 }, Side::Left, 5000, 260, 0, Only({ 3 })));
+            Assert::IsTrue(other.ResolveSnap({ 1 }, Only({ 3 })).empty());
+            AssertRect({ 5000, 0, 10000, 10000 }, other.Current().at(3));
+        }
+
+        TEST_METHOD (SnapLeavesEmptyZonesUntouched)
+        {
+            // an earlier window expanded zone 2 to 4000..7500 and left (zone 2 is empty now); zone 0's window expanded
+            // to 3000. Snap into zone 1 (2500..5000): zone 0 conflicts and resets; zone 2 overlaps too but is empty
+            ZoneRectModel model(OneRow({ 2500, 2500, 2500, 2500 }));
+            AssertMoved(model.MoveEdge({ 2 }, Side::Left, 4000, 260, 0, Only({ 2 })));
+            AssertMoved(model.MoveEdge({ 0 }, Side::Right, 3000, 260, 0, Only({ 0 })));
+            AssertRect({ 4000, 0, 7500, 10000 }, model.Current().at(2));
+
+            AssertChanged({ 0 }, model.ResolveSnap({ 1 }, Only({ 0 })));
+            AssertAtBase(model, 0);
+            AssertRect({ 4000, 0, 7500, 10000 }, model.Current().at(2));
+            AssertAtBase(model, 3);
+        }
+
+        TEST_METHOD (SnapResetsTheTargetZoneModifiedByAWindowThatLeft)
+        {
+            // an earlier window expanded zone 1 to 2500..6000 and left; zone 3's window is expanded to 7000..10000
+            ZoneRectModel model(OneRow({ 2500, 2500, 2500, 2500 }));
+            AssertMoved(model.MoveEdge({ 1 }, Side::Right, 6000, 260, 0, Only({ 1 })));
+            AssertMoved(model.MoveEdge({ 3 }, Side::Left, 7000, 260, 0, Only({ 3 })));
+            AssertRect({ 2500, 0, 6000, 10000 }, model.Current().at(1));
+
+            // snap into zone 1 (nobody occupies it): it goes back to 2500..5000; zone 3 does not overlap it
+            AssertChanged({ 1 }, model.ResolveSnap({ 1 }, Only({ 3 })));
+            AssertAtBase(model, 1);
+            AssertRect({ 7000, 0, 10000, 10000 }, model.Current().at(3));
+            Assert::IsTrue(model.IsModified());
+        }
+
+        TEST_METHOD (SnapIntoUnknownOrBaseZonesChangesNothing)
+        {
+            auto model = TwoExpandedWindows();
+            const UnitRects before = model.Current();
+            Assert::IsTrue(model.ResolveSnap({}, Only({ 0, 3 })).empty());
+            Assert::IsTrue(model.ResolveSnap({ 1, 9 }, Only({ 0, 3 })).empty());
+            Assert::IsTrue(before == model.Current());
+
+            // an unmodified model: nothing to reset
+            ZoneRectModel fresh(OneRow({ 2500, 2500, 2500, 2500 }));
+            Assert::IsTrue(fresh.ResolveSnap({ 1 }, Only({ 0, 2, 3 })).empty());
+            Assert::IsFalse(fresh.IsModified());
+        }
     };
 }
