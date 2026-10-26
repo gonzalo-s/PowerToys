@@ -6,6 +6,7 @@
 #include <FancyZonesLib/FancyZonesData/CustomLayouts.h>
 #include <FancyZonesLib/ZoneIndexSetBitmask.h>
 #include <FancyZonesLib/Layout.h>
+#include <FancyZonesLib/LayoutConfigurator.h>
 #include <FancyZonesLib/Settings.h>
 
 #include "Util.h"
@@ -86,6 +87,32 @@ namespace FancyZonesUnitTests
         {
             CustomAssert::AreEqual(m_layout->Id(), m_data.uuid);
             CustomAssert::AreEqual(m_layout->Type(), m_data.type);
+        }
+
+        TEST_METHOD (InitFromGridUsesGivenPercentsAndSpacing)
+        {
+            auto grid = LayoutConfigurator::GridInfo(m_data).value();
+            grid.columnsPercents()[0] = 6000;
+            grid.columnsPercents()[1] = 4000;
+
+            Assert::IsTrue(m_layout->InitFromGrid(FancyZonesUtils::Rect(RECT{ 0, 0, 1920, 1080 }), grid));
+            Assert::AreEqual(17, m_layout->Spacing());
+            Assert::AreEqual(size_t{ 4 }, m_layout->Zones().size());
+
+            // column boundary at 6000 * 1920 / 10000 = 1152, spacing/2 = 8 on each side
+            Assert::AreEqual(1144L, m_layout->Zones().at(0).GetZoneRect().right);
+            Assert::AreEqual(1160L, m_layout->Zones().at(1).GetZoneRect().left);
+            // whole line: the bottom row shares the same boundary
+            Assert::AreEqual(1144L, m_layout->Zones().at(2).GetZoneRect().right);
+            Assert::AreEqual(1160L, m_layout->Zones().at(3).GetZoneRect().left);
+            // rows untouched: 5000 * 1080 / 10000 = 540, minus 8
+            Assert::AreEqual(532L, m_layout->Zones().at(0).GetZoneRect().bottom);
+        }
+
+        TEST_METHOD (InitFromGridRejectsEmptyWorkArea)
+        {
+            const auto grid = LayoutConfigurator::GridInfo(m_data).value();
+            Assert::IsFalse(m_layout->InitFromGrid(FancyZonesUtils::Rect(RECT{ 0, 0, 0, 0 }), grid));
         }
 
         TEST_METHOD (EmptyZones)

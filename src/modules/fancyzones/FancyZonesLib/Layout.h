@@ -12,6 +12,9 @@ public:
     ~Layout() = default;
 
     bool Init(const FancyZonesUtils::Rect& workAreaRect, HMONITOR monitor) noexcept;
+    // Rebuilds the zones from an explicit grid description (used for working layouts), keeping this layout's spacing.
+    bool InitFromGrid(const FancyZonesUtils::Rect& workAreaRect, const FancyZonesDataTypes::GridLayoutInfo& grid) noexcept;
+    int Spacing() const noexcept;
 
     GUID Id() const noexcept;
     FancyZonesDataTypes::ZoneSetLayoutType Type() const noexcept;
