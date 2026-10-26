@@ -414,17 +414,12 @@ namespace FancyZonesZoneRects
         Groups groups;
         if (beyond(target, wall))
         {
-            // Expand. When nothing is pushed (only empty zones ahead) the side may go up to the work-area border minus
-            // the minimum size, so it stays an inner side; it is never forced back if it already is closer to the border.
-            int borderLimit = high ? TotalUnits - effectiveMin : effectiveMin;
-            if (beyond(wall, borderLimit))
+            // Expand. The work-area border is the limit (0 / TotalUnits): no minimum is kept free beyond the dragged edge,
+            // so the window can reach the screen border. Pushed zones keep their minimum below.
+            const int borderLimit = high ? TotalUnits : 0;
+            if (beyond(target, borderLimit))
             {
-                borderLimit = wall;
-            }
-
-            if (groupsFor(target).b.empty() && beyond(target, borderLimit))
-            {
-                target = borderLimit; // the pushed set can only shrink as the target moves back: it stays empty
+                target = borderLimit;
             }
 
             // Every pushed zone keeps its minimum: t may not pass its near edge minus that minimum. The pushed set only

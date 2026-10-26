@@ -1178,7 +1178,8 @@ namespace FancyZonesUnitTests
         // release rule: zone boundary b = p +/- spacing / 2; a boundary within 19 px of an original gridline g lands
         // exactly on g (the 20 px magnet; 20..21 px depends on the unit rounding and is ambiguous); otherwise b
         // itself; then clamped to [floor(L * lowUnits / 10000), floor(L * highUnits / 10000)], the limits where the
-        // zones on either side of the wall keep the minimum size. nullopt = ambiguous.
+        // zones on either side of the wall keep the minimum size (toward the work-area border the limit is the border,
+        // where the window edge sits one full spacing inside it). nullopt = ambiguous.
         static std::optional<long> ExpectedEdge(long p, bool high, long length, int spacing, const std::vector<int>& lineUnits, int lowUnits, int highUnits)
         {
             const long half = spacing / 2;
@@ -1219,6 +1220,12 @@ namespace FancyZonesUnitTests
             }
 
             const long boundary = outcomes[0];
+            // On the work-area border itself the zone's outer margin is the full spacing (not half of it).
+            if (high ? (highUnits == 10000 && boundary == highPx) : (lowUnits == 0 && boundary == lowPx))
+            {
+                return high ? boundary - spacing : boundary + spacing;
+            }
+
             return high ? boundary - half : boundary + half;
         }
 
