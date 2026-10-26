@@ -36,6 +36,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="DraggingState.h" />
+    <ClInclude Include="DividerModel.h" />
     <ClInclude Include="EditorParameters.h" />
     <ClInclude Include="FancyZonesData\CustomLayouts.h" />
     <ClInclude Include="FancyZonesData\AppliedLayouts.h" />
@@ -86,6 +87,7 @@
   <ItemGroup>
     <ClCompile Include="Colors.cpp" />
     <ClCompile Include="DraggingState.cpp" />
+    <ClCompile Include="DividerModel.cpp" />
     <ClCompile Include="EditorParameters.cpp" />
     <ClCompile Include="FancyZonesData\AppZoneHistory.cpp">
       <PrecompiledHeaderFile>../pch.h</PrecompiledHeaderFile>
