@@ -32,6 +32,7 @@
 #include <FancyZonesLib/VirtualDesktop.h>
 #include <FancyZonesLib/WindowKeyboardSnap.h>
 #include <FancyZonesLib/WindowMouseSnap.h>
+#include <FancyZonesLib/WindowResizeHandler.h>
 #include <FancyZonesLib/WindowUtils.h>
 #include <FancyZonesLib/WorkArea.h>
 #include <FancyZonesLib/WorkAreaConfiguration.h>
@@ -374,6 +375,7 @@ private:
     std::unique_ptr<WindowMouseSnap> m_windowMouseSnapper{};
     WindowKeyboardSnap m_windowKeyboardSnapper{};
     WorkAreaConfiguration m_workAreaConfiguration;
+    WindowResizeHandler m_resizeHandler{ m_workAreaConfiguration };
     DraggingState m_draggingState;
     bool m_monitorRotationPreviewActive = false;
     MonitorRotation::KeyState m_monitorRotationKeyState;
@@ -509,6 +511,12 @@ FancyZones::VirtualDesktopChanged() noexcept
 
 void FancyZones::MoveSizeStart(HWND window, HMONITOR monitor)
 {
+    // Resizing a snapped window by its edge moves grid dividers instead of starting a snap drag.
+    if (FancyZonesWindowUtils::IsCursorTypeIndicatingSizeEvent() && m_resizeHandler.Begin(window))
+    {
+        return;
+    }
+
     m_windowMouseSnapper = WindowMouseSnap::Create(window, m_workAreaConfiguration.GetAllWorkAreas(), m_notificationUtil.get());
     if (m_windowMouseSnapper)
     {
@@ -539,6 +547,8 @@ void FancyZones::MoveSizeUpdate(HMONITOR monitor, POINT const& ptScreen)
 
 void FancyZones::MoveSizeEnd()
 {
+    m_resizeHandler.End();
+
     if (m_windowMouseSnapper)
     {
         m_windowMouseSnapper->MoveSizeEnd();
@@ -552,6 +562,8 @@ void FancyZones::MoveSizeEnd()
 
 void FancyZones::AbortMoveSize()
 {
+    m_resizeHandler.Abort();
+
     if (m_windowMouseSnapper)
     {
         m_windowMouseSnapper->Abort();
@@ -1005,6 +1017,8 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         }
         else if (message == WM_PRIV_LOCATIONCHANGE)
         {
+            m_resizeHandler.Update();
+
             if (auto monitor = MonitorFromPoint(ptScreen, MONITOR_DEFAULTTONULL))
             {
                 MoveSizeUpdate(monitor, ptScreen);
@@ -1018,6 +1032,11 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         else if (message == WM_PRIV_WINDOWDESTROYED)
         {
             auto hwnd = reinterpret_cast<HWND>(wparam);
+            if (m_resizeHandler.IsTracking(hwnd))
+            {
+                m_resizeHandler.Abort();
+            }
+
             // If the destroyed window was being dragged, abort the drag without
             // snapping. Calling MoveSizeEnd() here would snap the now-destroyed
             // HWND into a zone and corrupt the layout state.

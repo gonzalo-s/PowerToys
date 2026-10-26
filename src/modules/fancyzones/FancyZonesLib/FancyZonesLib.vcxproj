@@ -76,6 +76,7 @@
     <ClInclude Include="WindowKeyboardSnap.h" />
     <ClInclude Include="WindowMouseSnap.h" />
     <ClInclude Include="FancyZonesWindowProperties.h" />
+    <ClInclude Include="WindowResizeHandler.h" />
     <ClInclude Include="WindowUtils.h" />
     <ClInclude Include="Zone.h" />
     <ClInclude Include="Colors.h" />
@@ -135,6 +136,7 @@
     <ClCompile Include="VirtualDesktop.cpp" />
     <ClCompile Include="WindowKeyboardSnap.cpp" />
     <ClCompile Include="WindowMouseSnap.cpp" />
+    <ClCompile Include="WindowResizeHandler.cpp" />
     <ClCompile Include="WindowUtils.cpp" />
     <ClCompile Include="Zone.cpp" />
     <ClCompile Include="WorkArea.cpp" />
