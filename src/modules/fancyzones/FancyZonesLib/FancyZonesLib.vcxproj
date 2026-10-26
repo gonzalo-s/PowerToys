@@ -82,6 +82,7 @@
     <ClInclude Include="HighlightedZones.h" />
     <ClInclude Include="ZoneIndexSetBitmask.h" />
     <ClInclude Include="WorkArea.h" />
+    <ClInclude Include="WorkingLayouts.h" />
     <ClInclude Include="ZonesOverlay.h" />
   </ItemGroup>
   <ItemGroup>
@@ -137,6 +138,7 @@
     <ClCompile Include="WindowUtils.cpp" />
     <ClCompile Include="Zone.cpp" />
     <ClCompile Include="WorkArea.cpp" />
+    <ClCompile Include="WorkingLayouts.cpp" />
     <ClCompile Include="HighlightedZones.cpp" />
     <ClCompile Include="ZonesOverlay.cpp" />
   </ItemGroup>
